@@ -4,6 +4,18 @@
 using Markdown
 using InteractiveUtils
 
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    return quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
 # ╔═╡ 7d26a11c-f98c-473a-9d11-9c564deb1272
 begin
 	# setting up the notebook
@@ -207,16 +219,211 @@ Here we import the spin operators in order to later define the Hamiltonian of th
 md"""
 ## Index Manipulation and Contractions
 
-TensorKit.jl conveniently re-exports the functionality provided by [TensorOperations.jl]()
+In tensor network algorithms, “index manipulation” tends to take up half the work: you are constantly reordering legs, contracting them, grouping them into composite indices, inserting identities or gauges, ...
+To allow these operations, TensorKit.jl conveniently re-exports the functionality provided by [TensorOperations.jl](https://github.com/QuantumKitHub/TensorOperations.jl/).
+In particular, the `@tensor` macro can be used to provide an intuitive [*Einstein notation*](https://en.wikipedia.org/wiki/Einstein_notation)-based syntax that is easier to read as well as performant.
+Being a Julia macro, the index patterns are evaluated only once when the code is parsed, and baked into the compiled code afterwards.
+
+There are three recurring patterns we will use throughout CTMRG and observable calculations:
+
+1. Permuting legs (reordering indices to match a desired contraction pattern),
+2. Contracting networks of tensors,
+3. Fusing / splitting legs (turning multiple indices into one composite index and back).
+
+Here we will show how the `@tensor` macro can be used to achieve each of these goals.
+"""
+
+# ╔═╡ f9a33166-f457-4cf9-9409-9917c23d51fe
+md"""
+!!! warning
+	As we are now starting to combine different tensors in various ways, we have to be careful to make sure to only combine matching indices.
+	In particular, we can only add tensors that have matching spaces (both the individual indices as well as the bipartition have to be equal), and we may only contract over indices that are equal and have matching arrows.
+	Whenever disallowed combinations are attempted, TensorKit will throw a `SpaceMismatch` error.
+"""
+
+# ╔═╡ aee1fb88-0631-483f-a7fd-7ecf8c66f06b
+md"""
+### Permutations
+
+Starting off with the reordering of indices, we can simply assign various symbols to the various indices of a tensor, and reorder them in the output.
+For example, the following snippet would construct the transpose of an input matrix `A`:
+
+```julia
+@tensor Aᵀ[j; i] := A[i; j]
+```
+
+Various remarks can be made for this simple expression.
+1. Any combination of symbols can be used as a name for one of the indices, including signed and unsigned integers, longer names such as `myindexname_123` as well as various *prime*-levels `i'`, `i''`, etc.
+2. The `;` between the symbols on the left-hand side of the equation is used to specify the bipartition of the resulting `TensorMap`. The `;` between the symbols on the right-hand side of the equation can be omitted and is simply there for readability.
+3. The `:=` symbol is used to indicate that we wish to construct a completely *new* output `TensorMap`. Replacing this with `+=`, `-=` or `=` instead attempts to update a pre-existing object.
+
+With this, it is possible to create more advanced combinations of permuted input tensors, as well as linear combinations thereof.
+For example:
+
+```julia
+@tensor B2[i j k l] := B1[l k j i] # equivalent to B2[i j k l; ()]
+@tensor C[1; 2] := C1[1 2] + C2[1; 2] + C3[(); 1 2] # repartitioning the domain-codomain
+# ...
+```
+"""
+
+# ╔═╡ 9577bf9b-1ce2-4497-8de4-5b7ce5e86010
+md"""
+### Contractions
+
+Repeated indices on the right-hand side of the equations are assumed to be contracted, i.e. summed over.
+These repeated indices are allowed to appear on different tensors (*contraction*) or on the same tensor (*partial trace*), but can only appear twice, and not more.
+Repeated indices on the left-hand side is not allowed.
+Otherwise, the same rules as for the index permutations still apply.
+For example:
+
+```julia
+@tensor D[a, d, j, i, g] := A[a, b, c, d, e] * B[b, e, f, g] * C[c, f, i, j]
+```
+
+For networks of tensors that involve more than two input tensors, the computation is carried out by pairwise contraction.
+Even though the exact contraction order, i.e. which pairwise contractions to perform, has no influence on the values of the resulting tensor, it can have a drastic effect on the runtime.
+By default, the `@tensor` macro will simply evaluate expressions in a left-to-right manner.
+In other words, the previous expression is equivalent to `(A[a, b, c, d, e] * B[b, e, f, g]) * C[c, f, i, j]`.
+However, parentheses within the `@tensor` expressions are respected, and can therefore be used to alter the default order.
+Furthermore, whenever exclusively integers are used as labels, the contraction will take place by ascending order of the labels, i.e. according to the [NCON convention](https://arxiv.org/abs/1402.0939).
+Finally, it can be useful to explicitly specify the order without altering the labels by adding a `order = (...)` keyword expression to the `@tensor` call.
+
+```julia
+A = rand(ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2)
+B = rand((ℂ^2)' ⊗ (ℂ^2)' ⊗ ℂ^2 ⊗ ℂ^2)
+C = rand((ℂ^2)' ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2)
+@tensor order = (c, f, b, e) D[a, d, j, i, g] := A[a, b, c, d, e] * B[b, e, f, g] * C[c, f, i, j]
+```
+
+"""
+
+# ╔═╡ 32944d9c-c5ad-48eb-a9b0-69ed0df03acf
+md"""
+Often determining the optimal contraction order is not an easy task, as it depends on the topology of the network, as well as on the sizes of the input tensors.
+For these cases, it can be convenient to construct an example with tensors that represent real workloads, and verify at runtime that the contraction orders are correct.
+For this purpose, the `costcheck = warn` keyword combination can be used, which will warn for suboptimal contraction orders at runtime and provide you with an optimal order to insert into the expression.
+Keep in mind that this runtime check can be expensive though, and should typically be disabled whenever the optimal order has been identified.
+"""
+
+# ╔═╡ af4bac3d-02cc-48d5-ae3a-df31c7f3e82a
+let
+	A = rand(ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2)
+	B = rand((ℂ^2)' ⊗ (ℂ^2)' ⊗ ℂ^2 ⊗ ℂ^2)
+	C = rand((ℂ^2)' ⊗ (ℂ^2)' ⊗ ℂ^2 ⊗ ℂ^2)
+	@tensor costcheck = warn order = (c, f, b, e) D[a, d, j, i, g] := A[a, b, c, d, e] * B[b, e, f, g] * C[c, f, i, j]
+end;
+
+# ╔═╡ b245f91b-df80-4a1b-a6f9-d1b3ceb018da
+md"""
+Finally, whenever a `SpaceMismatch` is thrown it can be a bit cumbersome to try and identify which index is responsible for this.
+To that end, the `contractcheck = true` keyword can be added to insert runtime checks that provide more helpful messages, pinpointing the exact origin of the error to a specific symbol.
+
+Turn on `contractcheck`: $(@bind do_contractcheck Switch())
+"""
+
+# ╔═╡ a4abe1b6-f97a-4d81-abc3-4e930dff7632
+let
+	A = rand(ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2 ⊗ ℂ^2)
+	B = rand(ℂ^2 ⊗ (ℂ^2)' ⊗ ℂ^2 ⊗ ℂ^2)
+	C = rand((ℂ^2)' ⊗ (ℂ^2)' ⊗ ℂ^2 ⊗ ℂ^2)
+	if do_contractcheck
+		@tensor contractcheck = true D[a, d, j, i, g] := A[a, b, c, d, e] * B[b, e, f, g] * C[c, f, i, j]
+	else
+		@tensor D[a, d, j, i, g] := A[a, b, c, d, e] * B[b, e, f, g] * C[c, f, i, j]
+	end
+end;
+
+# ╔═╡ c5838a61-56f4-49f6-b7d7-e1d738aa51af
+md"""
+!!! note
+	The curious reader may wish to inspect the generated code of the `@tensor expression`.
+	Since this code is not meant for human-consumption it can be difficult to parse, but there are (rare) cases where it can be useful to explicitly inspect which code is being run.
+	For this, we can use `@macroexpand @tensor expression`.
+"""
+
+# ╔═╡ 56715c2b-8283-4a83-af08-fc72953b47e7
+md"""
+### Combining and Splitting Indices
+
+Finally we wish to demonstrate how to merge and split different tensor indices.
+To do so, we take a step back and ask ourselves what we are trying to do in terms of mathematical operations.
+For this, we consider a small network with two `TensorMap`s `A` and `B`:
+
+```math
+\begin{align}
+A : W \leftarrow V_1 \otimes V_2 \\ 
+B : V_1 \otimes V_2 \leftarrow Z
+\end{align}
+```
+
+We now effectively wish to transform this network such that we group indices corresponding to ``V_1`` and ``V_2``, without altering the value of the contracted network, i.e. we aim to find ``\tilde{A} : W \leftarrow V`` and ``\tilde{B} : V \leftarrow Z`` such that ``V \simeq V_1 \otimes V_2`` and
+
+```math
+C = A \cdot B = \tilde{A} \cdot \tilde{B}
+```
+
+This can be achieved by inserting a fusing and splitting tensor ``F : V \leftarrow V_1 \otimes V_2`` and ``F^{-1} : V_1 \otimes V_2 \leftarrow V``, such that we obtain
+
+```math
+C = A \cdot B = A \cdot F^{-1} \cdot F \cdot B = (A \cdot F^{-1}) \cdot (F \cdot B) = \tilde{A} \cdot \tilde{B}
+```
+
+Translating this into code, we would get:
+"""
+
+# ╔═╡ 53dc3a3d-db99-4ad9-8889-3afcd5864d84
+let
+	W, V1, V2, Z = ℂ^2, ℂ^2, ℂ^2, ℂ^2
+	A = rand(W ← V1 ⊗ V2)
+	B = rand(V1 ⊗ V2 ← Z)
+	
+	F = isomorphism(fuse(V1 ⊗ V2) ← V1 ⊗ V2)
+	Ã = A * F'
+	B̃ = F * B
+	
+	A * B ≈ Ã * B̃
+end
+
+# ╔═╡ 85dc0714-2f66-4bac-975e-a8af43fb4cbc
+md"""
+!!! note
+	In principle, any invertible fusing tensor ``F`` would yield equivalent results, and the particular chosen value is merely a change of basis.
+	Therefore, it is often convenient to choose a `unitary` fusing tensor instead, as these can be efficiently inverted through the `adjoint` operation.
+	In TensorKit, both `unitary` and `isomorphism` will map to a `TensorMap` whos matrix representation is simply the identity, so both are unitary and efficient to construct
 """
 
 # ╔═╡ 0600518e-aef2-4f9c-ad0f-0f082c58f391
 md"""
 ## Factorizations
+
+The final piece of the TensorKit puzzle before we are ready to move on to CTMRG consists of factorizations.
+If the previous section can be thought of as ways of combining multiple tensors into a single output tensor, here we aim to do the opposite and create multiple tensors from a single input tensor.
+Indeed, for most factorizations contracting the factors is typically equal to the original tensor, or at least provides a good approximation thereof.
+Of course, we typically want some additional properties for these tensors, which depend on the type of factorization that is chosen.
+In TensorKit, these are provided by [MatrixAlgebraKit.jl](https://github.com/QuantumKitHub/MatrixAlgebraKit.jl).
+
+For the purpose of this notebook, the main factorization that is required is the [singular value decomposition (SVD)](https://en.wikipedia.org/wiki/Singular_value_decomposition), which factorizes a matrix ``A = U \Sigma V^H`` such that both ``U`` and ``V^H`` are isometries, and ``\Sigma`` is a diagonal matrix with real non-negative entries.
+While typically defined for matrices, we can trivially extend this definition for `TensorMap`s by using their interpretation as linear map from the domain to the codomain spaces.
+This factorization is particularly useful since it additionally allows optimal low-rank approximations of the input by discarding the smallest singular values.
+
+In MatrixAlgebraKit, this is accessible through the following:
+
+`maxdim = ` $(@bind maxdim Slider(1:100; default=25, show_value=true))
 """
 
-# ╔═╡ b446e9e3-b57a-42fd-93fb-030a01a67497
-@macroexpand @tensor C[i k] := A[i j] * B[j k]
+# ╔═╡ faa5861e-bd36-4503-89bf-ed56a190250f
+let
+	A = rand(ℂ^100, ℂ^100)
+	U, S, Vᴴ = svd_trunc(A; trunc = truncrank(maxdim))
+	space(U), space(S), space(Vᴴ)
+end
+
+# ╔═╡ 394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
+md"""
+!!! warning
+	Factorizing a `TensorMap` will use the **current** bipartition of the provided tensor as axis around which to factorize, so we have to make sure we provide input tensors that have been correctly permuted
+"""
 
 # ╔═╡ f176dc62-b1f5-447c-958f-b08a6ff2efd7
 md"""
@@ -226,8 +433,8 @@ md"""
 Given an infinite 2D tensor network (e.g. the PEPS norm network), the exact contraction thereof is intractable.
 Instead, CTMRG approximates the infinite environment around a local region by a finite set of tensors:
 
-- Four **corner tensors**: `C₁, C₂, C₃, C₄`
-- Four **edge tensors**: `T₁, T₂, T₃, T₄`
+- Four **corner tensors**: `corner_northwest, corner_northeast, corner_southeast, corner_southwest`
+- Four **edge tensors**: `edge_north, edge_east, edge_south, edge_west`
 
 $(PlutoUI.LocalResource("./assets/ctmrg_contraction.jpeg"))
 
@@ -1816,10 +2023,22 @@ version = "17.7.0+0"
 # ╟─439133a3-10c6-4da6-a671-38d2453d086b
 # ╟─d05ac00c-1e69-4952-9629-80468f02096d
 # ╠═30e688b4-293f-40af-a839-31fabec981cc
-# ╠═d73e61f1-622e-49b2-97bb-dec56807d117
-# ╠═0600518e-aef2-4f9c-ad0f-0f082c58f391
-# ╠═b446e9e3-b57a-42fd-93fb-030a01a67497
-# ╟─f176dc62-b1f5-447c-958f-b08a6ff2efd7
+# ╟─d73e61f1-622e-49b2-97bb-dec56807d117
+# ╟─f9a33166-f457-4cf9-9409-9917c23d51fe
+# ╟─aee1fb88-0631-483f-a7fd-7ecf8c66f06b
+# ╟─9577bf9b-1ce2-4497-8de4-5b7ce5e86010
+# ╟─32944d9c-c5ad-48eb-a9b0-69ed0df03acf
+# ╠═af4bac3d-02cc-48d5-ae3a-df31c7f3e82a
+# ╟─b245f91b-df80-4a1b-a6f9-d1b3ceb018da
+# ╠═a4abe1b6-f97a-4d81-abc3-4e930dff7632
+# ╟─c5838a61-56f4-49f6-b7d7-e1d738aa51af
+# ╟─56715c2b-8283-4a83-af08-fc72953b47e7
+# ╠═53dc3a3d-db99-4ad9-8889-3afcd5864d84
+# ╟─85dc0714-2f66-4bac-975e-a8af43fb4cbc
+# ╟─0600518e-aef2-4f9c-ad0f-0f082c58f391
+# ╠═faa5861e-bd36-4503-89bf-ed56a190250f
+# ╟─394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
+# ╠═f176dc62-b1f5-447c-958f-b08a6ff2efd7
 # ╠═df08983e-dab0-4a00-bf0c-4eb91f42f1fa
 # ╟─20f29190-2e0d-42e3-af82-11761478d29d
 # ╟─ab8cc3a0-0fd4-4f11-be1d-40b2a44f53d2
@@ -1846,7 +2065,7 @@ version = "17.7.0+0"
 # ╟─d6a71ccd-5bee-4532-bf29-03348ac7bb8e
 # ╟─f5dd768c-97b4-48cc-be0c-ed36ffad371d
 # ╠═607be339-8a6a-4a18-bbde-7775a349bbc1
-# ╠═941cfb90-087e-48ea-93df-8e72aaaaff8b
+# ╟─941cfb90-087e-48ea-93df-8e72aaaaff8b
 # ╟─1c6868d8-49aa-41a5-ac63-a09fa5e60fc4
 # ╠═0689c458-4352-4800-a7e2-29b9adfce426
 # ╟─0ba5f43a-509f-49e5-ae4d-7d4c995a60fc
