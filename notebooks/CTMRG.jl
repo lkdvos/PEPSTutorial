@@ -32,6 +32,9 @@ using TensorKitTensors: SpinOperators
 # ╔═╡ d6e0fb57-f686-4400-aa92-748288e0591d
 using Zygote # pronounced Zee-goat-ehhh
 
+# ╔═╡ 9eb6a3e3-29bf-481c-b23e-aabaae93345b
+using Random
+
 # ╔═╡ aeeae089-8fd3-4f85-b0bb-8773f9696073
 TableOfContents()
 
@@ -418,15 +421,15 @@ Note that often it is a good idea to additionally truncate *small* values.
 This can be achieved by combining truncation stragies:
 """
 
-# ╔═╡ 24028f25-c076-431d-87e1-740906412b15
-trunc_default = truncrank(maxdim) & trunctol(; atol = 1e-10);
-
 # ╔═╡ faa5861e-bd36-4503-89bf-ed56a190250f
 let
 	A = rand(ℂ^100, ℂ^100)
-	U, S, Vᴴ = svd_trunc(A; trunc = trunc_default)
+	U, S, Vᴴ = svd_trunc(A; trunc = truncrank(maxdim) & trunctol(; atol = 1e-8))
 	space(U), space(S), space(Vᴴ)
 end
+
+# ╔═╡ 24028f25-c076-431d-87e1-740906412b15
+trunc_default = truncrank(50) & trunctol(; atol = 1e-10);
 
 # ╔═╡ 394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
 md"""
@@ -879,9 +882,12 @@ md"""
 	Therefore, we first make local fused density-matrix tensors, and then contract these into the environment
 """
 
+# ╔═╡ 4555b77c-6d3a-4bfd-b1a7-fa14e93670a1
+const DoubleDensityTensor{T, S} = AbstractTensorMap{T, S, 2, 4}
+
 # ╔═╡ 80907dcf-e9b6-47e8-89e9-f9e69a23ee63
 """
-	merge_ketbra(peps::PEPSTensor) -> ρ_local
+	merge_ketbra(peps::PEPSTensor) -> ρ_local::DoubleDensityTensor
 
 Compute the fused local sandwich for the reduced density matrix, by combining a bra- and ket-layer but without contracting the physical indices.
 See also `merge_braket` for a similar implementation, but with the physical spaces contracted.
@@ -891,60 +897,54 @@ The shape of the output should be:
 where ``N``, ``E``, ``S`` and ``W`` are the fused north, east, south and west spaces.
 """
 function merge_ketbra(peps::PEPSTensor)
-	V_north = space(peps, 2) ⊗ space(peps, 2)'
-	fuse_north = isomorphism(fuse(V_north) ← V_north)
-	
-	V_east = space(peps, 3) ⊗ space(peps, 3)'
-	fuse_east = isomorphism(fuse(V_east) ← V_east)
-	
-	@tensor ketbra[P P'; N E S W] := 
-		conj(peps[P'; n' e' s' w']) * peps[P; n e s w] *
-		fuse_north[N; n n'] * fuse_east[E; e e'] *
-		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
+	return missing
 end
 
 # ╔═╡ f6acc633-d9ab-4cf5-b475-f608d0df13b2
-function reduced_densitymatrix_1x1(peps, environment)
-	ρ_local = merge_ketbra(peps)
-	return @tensor ρ[-1; -2] :=
-		environment.edge_west[11 3; 1] *
-		environment.corner_northwest[1; 2] *
-		environment.edge_north[2 4; 5] *
-		environment.corner_northeast[5; 6] *
-		environment.edge_east[6 7; 8] *
-		environment.corner_southeast[8; 9] *
-		environment.edge_south[9 10; 11] *
-		ρ_local[-1 -2; 4 7 10 3]
+"""
+	reduced_densitymatrix_1x1(ρ_local::DoubleDensityTensor, environment::CTMRGEnvironment) -> ρ
+
+Compute the single-site reduced density matrix from a double-layer density tensor and a CTMRG environment.
+The output shape should be:
+- `ρ`: ``P ← P``
+"""
+function reduced_densitymatrix_1x1(ρ_local::DoubleDensityTensor, environment::CTMRGEnvironment)
+	return missing
 end
 
 # ╔═╡ d007a99a-fb6a-4b76-9edc-949fa2787b8d
-function reduced_densitymatrix_1x2(peps, environment)
-	ρ_local = merge_ketbra(peps)
-	return @tensor contractcheck = true ρ[-1 -2; -3 -4] :=
-		environment.edge_south[17 4; 1] *
-		environment.corner_southwest[1; 2] *
-		environment.edge_west[2 3; 5] *
-		environment.corner_northwest[5; 6] *
-		environment.edge_north[6 7; 15] *
-		ρ_local[-1 -3; 7 16 4 3] *
-		environment.edge_north[15 11; 8] *
-		environment.corner_northeast[8; 9] *
-		environment.edge_east[9 10; 12] *
-		environment.corner_southeast[12; 13] *
-		environment.edge_south[13 14; 17] *
-		ρ_local[-2 -4; 11 10 14 16]
+"""
+	reduced_densitymatrix_1x2(ρ_local::DoubleDensityTensor, environment::CTMRGEnvironment) -> ρ
+
+Compute the horizontal nearest neighbour reduced density matrix from a double-layer density tensor and a CTMRG environment.
+The output shape should be:
+- `ρ`: ``P ⊗ P ← P ⊗ P``
+"""
+function reduced_densitymatrix_1x2(ρ_local::DoubleDensityTensor, environment::CTMRGEnvironment)
+	return missing
 end
 
 # ╔═╡ 4a65aa03-c385-4bfb-944c-911606a0e2ff
-function rotate_clockwise(peps::PEPSTensor)
-	@tensor peps′[p; N E S W] := peps[p; W N E S]
+"""
+	rotate_clockwise(ρ_local::DoubleDensityTensor) -> ρ_rotated::DoubleDensityTensor
+
+Compute the clockwise-rotated local double-layer density tensor.
+"""
+function rotate_clockwise(ρ_local::DoubleDensityTensor)
+	return missing
 end
 
 # ╔═╡ d97aae83-b513-4332-bc01-17fdd38b1381
+"""
+	reduced_densitymatrix_2x1(ρ_local::DoubleDensityTensor, environment::CTMRGEnvironment) -> ρ
+
+Compute the vertical nearest neighbour reduced density matrix from a double-layer density tensor and a CTMRG environment.
+This can be achieved by rotating the arguments and reusing the `reduced_densitymatrix_1x2` function.
+The output shape should again be:
+- `ρ`: ``P ⊗ P ← P ⊗ P``
+"""
 function reduced_densitymatrix_2x1(peps, environment)
-	peps_rotated = rotate_clockwise(peps)
-	environment_rotated = rotate_clockwise(environment)
-	return reduced_densitymatrix_1x2(peps_rotated, environment_rotated)
+	return missing
 end
 
 # ╔═╡ 001563e4-125c-46ba-97c0-c95b8bf25fec
@@ -961,7 +961,7 @@ In particular, we find three non-equivalent terms that we have to compute, the o
 """
 
 # ╔═╡ ffcabfcf-0ef9-45f6-ab97-c42a38659167
-hint(md"Keep in mind that when we are summing up these different contributions, the onsite terms are counted only once, while the twosite terms are counted twice!")
+hint(md"Keep in mind that when we are summing up these different contributions, the onsite terms are counted only once, while the twosite terms are counted twice.")
 
 # ╔═╡ f14e8ba9-d692-46da-be7b-3ac79af5d744
 """
@@ -1038,12 +1038,8 @@ md"""
 # V. Conclusions
 
 If everything went well, we should now be in a position to assess how confidently we can start optimizing infinite PEPS for various Hamiltonians defined on a square lattice.
-In particular, we find that just doing a naive implementation not only takes some effort, it additonally turns out to typically be quite slow and unstable.
-The reasons for this will be discussed throughout this workshop and various interesting talks are tackling various aspects of this.
-
-There are also a number of missing features to really turn this into a true algorithm ready for finding PEPS groundstates.
-In particular, unit cells, fixed-point differentiation, symmetries, hardware accellerators, ... are more or less required these days to really have a competitive algorithm.
-
+In particular, we find that just doing a naive implementation not only takes some (or quite a lot of) effort, it additonally turns out to typically be quite slow and unstable.
+The reasons for this will be and has been discussed throughout this workshop and various interesting talks are tackling various aspects of this.
 
 ## Open-source Libraries
 
@@ -1052,9 +1048,9 @@ In particular, we can refer to various of the presentations given this week for 
 Not only do these open-source libraries typically offer quite a few of these features out of the box, additionally quite a lot of time has gone into their design choices and optimizations.
 Keep in mind that as they are open-source, they often welcome new users as well as eager contributors with open arms!
 
-- PEPSKit.jl
-- YASTN
-- VariPEPS
+- [PEPSKit.jl](https://github.com/QuantumKitHub/PEPSKit.jl)
+- [YASTN](https://github.com/yastn/yastn)
+- [VariPEPS](https://github.com/variPEPS/variPEPS_Python)
 - ...
 """
 
@@ -1069,7 +1065,10 @@ md"""
 """
 
 # ╔═╡ f897eafd-d376-4ed9-811b-76290bf11280
-test_peps = rand(Float64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3) ⊗ ComplexSpace(3)' ⊗ ComplexSpace(3)')
+test_peps = let
+	Random.seed!(123456)
+	rand(Float64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3) ⊗ ComplexSpace(3)' ⊗ ComplexSpace(3)')
+end
 
 # ╔═╡ 14f49304-2286-48aa-b1b7-07a2e6f03cfe
 test_doublepeps = merge_braket(test_peps)
@@ -1104,7 +1103,7 @@ let
 end
 
 # ╔═╡ 1168c7df-9817-4aca-9173-03c9b6ef7d01
-function initialize_random_environment_solution(double_peps::DoublePEPSTensor, boundary_virtualspace)
+function initialize_random_environment_solution(double_peps::DoublePEPSTensor, boundary_virtualspace = ℂ^4)
 	T = scalartype(double_peps)
 	
 	north_virtualspace = space(double_peps, 3)'
@@ -1297,19 +1296,6 @@ md"""
 ### Rotation solutions
 """
 
-# ╔═╡ 49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
-function ctmrg_north_iteration_solution(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
-	C_northwest, E_north, C_northeast = ctmrg_expand_solution(environment, peps)
-	PR, PL = ctmrg_projectors_solution(environment, peps; kwargs...)
-	C_northwest′, E_north′, C_northeast′ = ctmrg_renormalize_solution(
-		C_northwest, E_north, C_northeast, PR, PL
-	)
-	return CTMRGEnvironment(
-		E_north′, environment.edge_east, environment.edge_south, environment.edge_west,
-		C_northwest′, C_northeast′, environment.corner_southeast, environment.corner_southwest
-	)
-end
-
 # ╔═╡ ada2cab6-fc02-4b05-a7d5-edbbae746dde
 function rotate_clockwise_solution(peps::DoublePEPSTensor)
 	return @tensor peps′[S E; W N] := peps[W S; N E]
@@ -1320,6 +1306,19 @@ function rotate_clockwise_solution(environment::CTMRGEnvironment)
 	return CTMRGEnvironment(
 		environment.edge_west, environment.edge_north, environment.edge_east, environment.edge_south,
 		environment.corner_southwest, environment.corner_northwest, environment.corner_northeast, environment.corner_southeast
+	)
+end
+
+# ╔═╡ 49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
+function ctmrg_north_iteration_solution(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
+	C_northwest, E_north, C_northeast = ctmrg_expand_solution(environment, peps)
+	PR, PL = ctmrg_projectors_solution(environment, peps; kwargs...)
+	C_northwest′, E_north′, C_northeast′ = ctmrg_renormalize_solution(
+		C_northwest, E_north, C_northeast, PR, PL
+	)
+	return CTMRGEnvironment(
+		E_north′, environment.edge_east, environment.edge_south, environment.edge_west,
+		C_northwest′, C_northeast′, environment.corner_southeast, environment.corner_southwest
 	)
 end
 
@@ -1357,6 +1356,11 @@ function ctmrg_iteration_solution(environment::CTMRGEnvironment, peps::DoublePEP
 	end
 	return environment
 end
+
+# ╔═╡ b58c62f8-9331-4742-a56a-37d7ee024277
+md"""
+### Convergence solutions
+"""
 
 # ╔═╡ 80afa573-0cc0-4c7e-98d6-f58bdf9205d9
 function singular_value_distance_solution(S1, S2)
@@ -1463,6 +1467,11 @@ function ctmrg_solution(environment, peps; maxiter = 100, tol = 1e-6, kwargs...)
 	return environment
 end
 
+# ╔═╡ e258b956-3faf-43fc-917f-098e31019ec1
+md"""
+### Reduced density matrix solutions
+"""
+
 # ╔═╡ 92008604-9dcf-470c-9ff2-73a485b276f4
 function merge_ketbra_solution(peps::PEPSTensor)
 	V_north = space(peps, 2) ⊗ space(peps, 2)'
@@ -1475,6 +1484,41 @@ function merge_ketbra_solution(peps::PEPSTensor)
 		conj(peps[P'; n' e' s' w']) * peps[P; n e s w] *
 		fuse_north[N; n n'] * fuse_east[E; e e'] *
 		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
+end
+
+# ╔═╡ 1a39fb62-515a-41d4-8ae0-4e8e16a830df
+let
+	test_result = merge_ketbra(test_peps)
+	actual_result = merge_ketbra_solution(test_peps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		keep_working(md"The space of the output is not correct. Did you check the order of the legs and bipartition?")
+	elseif !(test_result ≈ actual_result)
+			almost(md"The returned value is incorrect.")
+	else
+		correct()
+	end
+end
+
+# ╔═╡ 740e8895-9853-4c69-bca4-fd34ae4c2a6b
+let
+	ρ_local = merge_ketbra_solution(test_peps)
+	test_result = rotate_clockwise(ρ_local)
+	actual_result = rotate_clockwise_solution(ρ_local)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		keep_working(md"The space of the output is not correct. Did you check the order of the legs and bipartition?")
+	elseif !(test_result ≈ actual_result)
+		almost(md"The returned value is incorrect.")
+	else
+		correct()
+	end
 end
 
 # ╔═╡ ea14479b-91d0-4fa9-942b-a147e1649d4c
@@ -1490,9 +1534,27 @@ function reduced_densitymatrix_1x1_solution(ρ_local, environment)
 		ρ_local[-1 -2; 4 7 10 3]
 end
 
+# ╔═╡ c08f34fc-f212-4c17-a7b8-ea254051f4b0
+let
+	ρ_local = merge_ketbra_solution(test_peps)
+	test_result = reduced_densitymatrix_1x1(ρ_local, test_environment)
+	actual_result = reduced_densitymatrix_1x1_solution(ρ_local, test_environment)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		keep_working(md"The space of the output is not correct. Did you check the order of the legs and bipartition?")
+	elseif !(test_result ≈ actual_result)
+		almost(md"The returned value is incorrect.")
+	else
+		correct()
+	end
+end
+
 # ╔═╡ 5999904e-d69e-4f16-950e-0762432291ba
 function reduced_densitymatrix_1x2_solution(ρ_local, environment)
-	return @tensor contractcheck = true ρ[-1 -2; -3 -4] :=
+	return @tensor ρ[-1 -2; -3 -4] :=
 		environment.edge_south[17 4; 1] *
 		environment.corner_southwest[1; 2] *
 		environment.edge_west[2 3; 5] *
@@ -1507,6 +1569,24 @@ function reduced_densitymatrix_1x2_solution(ρ_local, environment)
 		ρ_local[-2 -4; 11 10 14 16]
 end
 
+# ╔═╡ 3ba7cdfd-94f7-417e-ba75-4369c0d2d9d1
+let
+	ρ_local = merge_ketbra_solution(test_peps)
+	test_result = reduced_densitymatrix_1x2(ρ_local, test_environment)
+	actual_result = reduced_densitymatrix_1x2_solution(ρ_local, test_environment)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		keep_working(md"The space of the output is not correct. Did you check the order of the legs and bipartition?")
+	elseif !(test_result ≈ actual_result)
+		almost(md"The returned value is incorrect.")
+	else
+		correct()
+	end
+end
+
 # ╔═╡ 343a1597-3192-4d5b-aa9c-276258ccc04f
 function reduced_densitymatrix_2x1_solution(ρ_local, environment)
 	ρ_rotated = rotate_clockwise_solution(ρ_local)
@@ -1514,9 +1594,27 @@ function reduced_densitymatrix_2x1_solution(ρ_local, environment)
 	return reduced_densitymatrix_1x2_solution(ρ_rotated, environment_rotated)
 end
 
+# ╔═╡ 23400fa1-39c4-40a7-a2de-cb85fec5aeaa
+let
+	ρ_local = merge_ketbra_solution(test_peps)
+	test_result = reduced_densitymatrix_2x1(ρ_local, test_environment)
+	actual_result = reduced_densitymatrix_2x1_solution(ρ_local, test_environment)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		keep_working(md"The space of the output is not correct. Did you check the order of the legs and bipartition?")
+	elseif !(test_result ≈ actual_result)
+		almost(md"The returned value is incorrect.")
+	else
+		correct()
+	end
+end
+
 # ╔═╡ 7fa96f51-db47-40c0-b2b0-df0e4fe1a326
 function ising_energy_solution(peps, environment; J = 1.0, g = 1.0)
-	ρ_local = merge_ketbra(peps)
+	ρ_local = merge_ketbra_solution(peps)
 	
 	ZZ = Z ⊗ Z
 	ρ = reduced_densitymatrix_1x2_solution(ρ_local, environment)
@@ -1576,8 +1674,8 @@ end
 # ╔═╡ 15508fe0-fa7e-416e-94a7-fb21db54f81c
 function naive_gradient_descent(peps; α = 0.1, J = 1.0, g = 1.0)
 	for i in 1:100
-		E, gradient = withgradient(peps) do peps
-			return loss_function_solution(peps; J, g)
+		E, gradient = withgradient(peps) do x
+			return loss_function_solution(x; J, g)
 		end
 		∇peps = only(gradient) # unpack Tuple
 		peps = peps - α * normalize(∇peps)
@@ -1593,6 +1691,7 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 PlutoTeachingTools = "661c6b06-c737-4d37-b85c-46df65de6f69"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 TensorKit = "07d1fe3e-3e46-537d-9eac-e9e13d0d4cec"
 TensorKitTensors = "41b62e7d-e9d1-4e23-942c-79a97adf954b"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
@@ -1611,7 +1710,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.10.10"
 manifest_format = "2.0"
-project_hash = "7a0ad6292ff314e35060cea28c64a6785b44ed8c"
+project_hash = "5e2b17fa6a0c62ad8d3dba93a735d5ec207b068b"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2491,8 +2590,8 @@ version = "17.4.0+2"
 # ╠═53dc3a3d-db99-4ad9-8889-3afcd5864d84
 # ╟─85dc0714-2f66-4bac-975e-a8af43fb4cbc
 # ╠═0600518e-aef2-4f9c-ad0f-0f082c58f391
-# ╠═24028f25-c076-431d-87e1-740906412b15
 # ╠═faa5861e-bd36-4503-89bf-ed56a190250f
+# ╠═24028f25-c076-431d-87e1-740906412b15
 # ╟─394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
 # ╟─f176dc62-b1f5-447c-958f-b08a6ff2efd7
 # ╠═ea38966c-c34d-4e5a-ad74-5cdc5d9c8c77
@@ -2540,11 +2639,17 @@ version = "17.4.0+2"
 # ╟─df668aea-2156-40f4-8dbd-2a442e863210
 # ╟─7e74bbd4-d62e-42ea-9c44-6106c5b9f860
 # ╟─67503430-d5d1-4ee6-847f-4b7dbecdf7ed
+# ╠═4555b77c-6d3a-4bfd-b1a7-fa14e93670a1
 # ╠═80907dcf-e9b6-47e8-89e9-f9e69a23ee63
+# ╟─1a39fb62-515a-41d4-8ae0-4e8e16a830df
 # ╠═f6acc633-d9ab-4cf5-b475-f608d0df13b2
+# ╠═c08f34fc-f212-4c17-a7b8-ea254051f4b0
 # ╠═d007a99a-fb6a-4b76-9edc-949fa2787b8d
+# ╠═3ba7cdfd-94f7-417e-ba75-4369c0d2d9d1
 # ╠═4a65aa03-c385-4bfb-944c-911606a0e2ff
+# ╟─740e8895-9853-4c69-bca4-fd34ae4c2a6b
 # ╠═d97aae83-b513-4332-bc01-17fdd38b1381
+# ╟─23400fa1-39c4-40a7-a2de-cb85fec5aeaa
 # ╟─001563e4-125c-46ba-97c0-c95b8bf25fec
 # ╟─ffcabfcf-0ef9-45f6-ab97-c42a38659167
 # ╠═f14e8ba9-d692-46da-be7b-3ac79af5d744
@@ -2563,6 +2668,7 @@ version = "17.4.0+2"
 # ╟─209aa00c-0281-4e8c-b32c-d77888e8a5ae
 # ╟─b333c5f9-ba3d-429c-9403-37d1f9fb7360
 # ╟─dececc2a-5b73-4ad8-8056-e5c0a97a230f
+# ╠═9eb6a3e3-29bf-481c-b23e-aabaae93345b
 # ╠═f897eafd-d376-4ed9-811b-76290bf11280
 # ╠═14f49304-2286-48aa-b1b7-07a2e6f03cfe
 # ╠═f560e045-433f-4562-a611-119ce410342f
@@ -2576,14 +2682,16 @@ version = "17.4.0+2"
 # ╟─8c8dcc41-a312-4231-87e7-c17208619e80
 # ╠═99fad623-4b57-4aad-bc3a-66230fb81034
 # ╟─e9fb5526-d68c-4b5d-ab7f-f7504d9405de
-# ╟─49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
-# ╠═6adac67a-3382-4ccd-bddd-6f7882a722ea
 # ╠═ada2cab6-fc02-4b05-a7d5-edbbae746dde
 # ╠═48270af5-c36a-499d-b0c1-f688820e7b84
+# ╟─49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
+# ╠═6adac67a-3382-4ccd-bddd-6f7882a722ea
 # ╠═21137319-da99-42df-ade3-7e3d808f9bc3
 # ╠═3411519b-ac28-4983-b477-026c8d015b97
+# ╟─b58c62f8-9331-4742-a56a-37d7ee024277
 # ╠═ee11b4f1-b048-4bf8-9dc4-2bdd4f44239f
 # ╠═80afa573-0cc0-4c7e-98d6-f58bdf9205d9
+# ╟─e258b956-3faf-43fc-917f-098e31019ec1
 # ╠═92008604-9dcf-470c-9ff2-73a485b276f4
 # ╠═ea14479b-91d0-4fa9-942b-a147e1649d4c
 # ╠═5999904e-d69e-4f16-950e-0762432291ba
