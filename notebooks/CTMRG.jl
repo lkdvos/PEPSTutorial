@@ -526,7 +526,8 @@ function merge_braket(peps::PEPSTensor)
 	V_east = space(peps, 3) ⊗ space(peps, 3)'
 	fuse_east = isomorphism(fuse(V_east) ← V_east)
 	@tensor braket[S W; N E] := conj(peps[p; n' e' s' w']) * peps[p; n e s w] *
-		fuse_north[N; n n'] * fuse_east[E; e e'] * conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
+		fuse_north[N; n n'] * fuse_east[E; e e'] *
+		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
 	return braket
 end
 
@@ -633,12 +634,12 @@ The easiest way to initialize them is to also start from a completely random env
 
 # ╔═╡ ff1bbb0b-6ff8-4835-a28f-f6b9ef221faa
 """
-	initialize_random_environment(double_peps::InfiniteDoublePEPS, boundary_virtualspace) -> environment::CTMRGEnvironment
+	initialize_random_environment(double_peps::InfiniteDoublePEPS, boundary_virtualspace = ℂ^1) -> environment::CTMRGEnvironment
 
 Randomly initialize the environment tensors for a given double-layer PEPS and environment bond dimension.
 The spaces and scalar type should be chosen to be compatible with the `double_peps`, making use of `scalartype(double_peps)` to extract the number type and `space(double_peps, i)` to extract the required spaces.
 """
-function initialize_random_environment(double_peps::DoublePEPSTensor, boundary_virtualspace)
+function initialize_random_environment(double_peps::DoublePEPSTensor, boundary_virtualspace = ℂ^1)
 	return missing
 end
 
@@ -851,7 +852,10 @@ md"""
 Now that we have a way of approximately contracting an infinite PEPS network, we can look into computing local observables.
 This is achieved by replacing the infinite environment around a local patch of tensors with the CTMRG approximation, and then contracting the remaining network.
 
-!!! to do insert figure
+```math
+\frac{\langle \psi | O | \psi \rangle}{\langle \psi | \psi \rangle} = 
+```
+$(PlutoUI.LocalResource("./assets/local_expectation.jpeg"))
 """
 
 # ╔═╡ 7e74bbd4-d62e-42ea-9c44-6106c5b9f860
@@ -866,8 +870,6 @@ This can then be used to compute observables through the following identificatio
 \frac{\langle \psi | O | \psi \rangle}{\langle \psi | \psi \rangle} = 
 	\frac{\text{tr}(O | \psi \rangle \langle \psi |)}{\text{tr}(| \psi \rangle \langle \psi |)} = \frac{\text{tr}(O \cdot \rho)}{\text{tr}(\rho)}
 ```
-
-!!! to do insert figure
 """
 
 # ╔═╡ 67503430-d5d1-4ee6-847f-4b7dbecdf7ed
@@ -988,13 +990,24 @@ For the loss function, we already have all of the components that we need to sta
 We just need to put the pieces together as follows:
 """
 
+# ╔═╡ 55e6c29b-2e62-4b86-8d76-ca94900878f0
+"""
+	loss_function(peps::PEPSTensor; trunc = trunc_default, maxiter = 100, J = 1.0, g = 0.5) -> energy::Real
+
+Compute the loss function for the given PEPS tensor.
+This can be achieved by following this procedure:
+
+1. Merge the PEPS tensor into a double layer (`merge_braket`)
+2. Initialize a CTMRG environment for the given PEPS (`initialize_random_environment(double_peps)`)
+3. Converge this environment using the CTMRG algorithm. (`ctmrg`)
+4. Compute the energy by combining the local terms. (`ising_energy`)
+"""
+function loss_function(peps::PEPSTensor; trunc = trunc_default, maxiter = 100, J = 1.0, g = 0.5)
+	return missing
+end
+
 # ╔═╡ 48466ad6-0daa-4ffa-bcf5-efa1578da7ee
 hint(md"To define a valid loss function, we must ensure the result is real!")
-
-# ╔═╡ c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
-let
-	still_missing()
-end
 
 # ╔═╡ e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 md"""
@@ -1450,25 +1463,6 @@ function ctmrg_solution(environment, peps; maxiter = 100, tol = 1e-6, kwargs...)
 	return environment
 end
 
-# ╔═╡ 55e6c29b-2e62-4b86-8d76-ca94900878f0
-"""
-	loss_function(peps::PEPSTensor; trunc = default_trunc, maxiter = 100, J = 1.0, g = 0.5) -> energy::Real
-
-Compute the loss function for the given PEPS tensor.
-This can be achieved by following this procedure:
-
-1. Merge the PEPS tensor into a double layer (`merge_braket`)
-2. Initialize a CTMRG environment for the given PEPS (`initialize_random_environment`)
-3. Converge this environment using the CTMRG algorithm. (`ctmrg`)
-4. Compute the energy by combining the local terms. (`ising_energy`)
-"""
-function loss_function(peps::PEPSTensor; trunc = default_trunc, maxiter = 100, J = 1.0, g = 0.5)
-	double_peps = merge_braket(peps)
-	environments = initialize_random_environment(double_peps, ℂ^maxdim)
-	environments = ctmrg_solution(environments, double_peps)
-	return real(ising_energy(peps, environments; J, g))
-end
-
 # ╔═╡ 92008604-9dcf-470c-9ff2-73a485b276f4
 function merge_ketbra_solution(peps::PEPSTensor)
 	V_north = space(peps, 2) ⊗ space(peps, 2)'
@@ -1555,11 +1549,28 @@ let
 end
 
 # ╔═╡ a4e00e0a-af1b-4a3f-997f-381bcbf9932d
-function loss_function_solution(peps::PEPSTensor; maxdim = 50, J = 1.0, g = 0.5)
+function loss_function_solution(peps::PEPSTensor; J = 1.0, g = 0.5, kwargs...)
 	double_peps = merge_braket(peps)
-	environments = initialize_random_environment(double_peps, ℂ^maxdim)
-	environments = ctmrg_solution(environments, double_peps)
+	environments = initialize_random_environment_solution(double_peps, ℂ^maxdim)
+	environments = ctmrg_solution(environments, double_peps; kwargs...)
 	return real(ising_energy_solution(peps, environments; J, g))
+end
+
+# ╔═╡ c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
+let
+	test_result = loss_function(test_peps)
+	actual_result = loss_function_solution(test_peps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		almost(md"The type of the output is not correct. Did you make sure the output is real?")
+	else
+		if !(test_result ≈ actual_result)
+			almost(md"The returned value is incorrect. Did you correctly count all contributions?")
+		else
+			correct()
+		end
+	end
 end
 
 # ╔═╡ 15508fe0-fa7e-416e-94a7-fb21db54f81c
@@ -2521,7 +2532,7 @@ version = "17.4.0+2"
 # ╟─0d6f69d6-7ed0-487a-852b-241d2580e1f3
 # ╟─05e524c3-0369-4bea-8aea-eec522953d5f
 # ╠═f7bd71f9-f785-452a-a606-84d0f823f09d
-# ╠═618d268f-869b-434b-a3d7-380d2f51ef25
+# ╟─618d268f-869b-434b-a3d7-380d2f51ef25
 # ╟─3d4a07e4-f5c1-42d7-bc4d-a15a2fb36b66
 # ╠═2481bcb0-3c48-4d3e-97d4-5f00efd8ef2f
 # ╠═8c32a473-4f08-4955-bdea-25cef4490de0
@@ -2542,14 +2553,14 @@ version = "17.4.0+2"
 # ╟─5f5a355a-24f8-44ac-827b-5a9a99edae8b
 # ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
 # ╟─48466ad6-0daa-4ffa-bcf5-efa1578da7ee
-# ╠═c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
+# ╟─c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
 # ╟─e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
 # ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
 # ╠═929586c8-e674-48c5-a1d4-5c6fc9fc1070
 # ╟─a6a226c4-f212-4dce-8ec2-56242028bb96
 # ╟─7a5a2c94-7050-4885-9a32-fd393a500379
-# ╠═209aa00c-0281-4e8c-b32c-d77888e8a5ae
+# ╟─209aa00c-0281-4e8c-b32c-d77888e8a5ae
 # ╟─b333c5f9-ba3d-429c-9403-37d1f9fb7360
 # ╟─dececc2a-5b73-4ad8-8056-e5c0a97a230f
 # ╠═f897eafd-d376-4ed9-811b-76290bf11280
@@ -2567,10 +2578,10 @@ version = "17.4.0+2"
 # ╟─e9fb5526-d68c-4b5d-ab7f-f7504d9405de
 # ╟─49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
 # ╠═6adac67a-3382-4ccd-bddd-6f7882a722ea
-# ╟─ada2cab6-fc02-4b05-a7d5-edbbae746dde
-# ╟─48270af5-c36a-499d-b0c1-f688820e7b84
-# ╟─21137319-da99-42df-ade3-7e3d808f9bc3
-# ╟─3411519b-ac28-4983-b477-026c8d015b97
+# ╠═ada2cab6-fc02-4b05-a7d5-edbbae746dde
+# ╠═48270af5-c36a-499d-b0c1-f688820e7b84
+# ╠═21137319-da99-42df-ade3-7e3d808f9bc3
+# ╠═3411519b-ac28-4983-b477-026c8d015b97
 # ╠═ee11b4f1-b048-4bf8-9dc4-2bdd4f44239f
 # ╠═80afa573-0cc0-4c7e-98d6-f58bdf9205d9
 # ╠═92008604-9dcf-470c-9ff2-73a485b276f4
