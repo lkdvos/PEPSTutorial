@@ -215,6 +215,12 @@ If you find that your specific tensor is missing, don't hesitate to reach out or
 Here we import the spin operators in order to later define the Hamiltonian of the transverse-field Ising model.
 """
 
+# ╔═╡ 7777f7a1-76b8-4331-bceb-0a4c345f0710
+const X = SpinOperators.S_x()
+
+# ╔═╡ 5fd30785-d1b1-47fb-8476-d89a4262046b
+const Z = SpinOperators.S_z()
+
 # ╔═╡ d73e61f1-622e-49b2-97bb-dec56807d117
 md"""
 ## Index Manipulation and Contractions
@@ -856,6 +862,11 @@ Now that we have a way of approximately contracting an infinite PEPS network, we
 This is achieved by replacing the infinite environment around a local patch of tensors with the CTMRG approximation, and then contracting the remaining network.
 
 !!! to do insert figure
+"""
+
+# ╔═╡ 7e74bbd4-d62e-42ea-9c44-6106c5b9f860
+md"""
+## Reduced density matrices
 
 However, it can be more convenient to work with reduced density matrices as an intermediate step in the calculation, which tends to avoid some duplicate work in contracting parts of the networks.
 The reduced density matrix for some number of local sites can be defined as the double-layer norm network where we have left the physical indices of these sites uncontracted.
@@ -877,13 +888,27 @@ md"""
 """
 
 # ╔═╡ 80907dcf-e9b6-47e8-89e9-f9e69a23ee63
-function merge_ketbra(peps::InfinitePEPS)
+"""
+	merge_ketbra(peps::PEPSTensor) -> ρ_local
+
+Compute the fused local sandwich for the reduced density matrix, by combining a bra- and ket-layer but without contracting the physical indices.
+See also `merge_braket` for a similar implementation, but with the physical spaces contracted.
+
+The shape of the output should be:
+- `ρ_local`: ``P ⊗ P^* ← N ⊗ E ⊗ S ⊗ W``
+where ``N``, ``E``, ``S`` and ``W`` are the fused north, east, south and west spaces.
+"""
+function merge_ketbra(peps::PEPSTensor)
 	V_north = space(peps, 2) ⊗ space(peps, 2)'
 	fuse_north = isomorphism(fuse(V_north) ← V_north)
+	
 	V_east = space(peps, 3) ⊗ space(peps, 3)'
 	fuse_east = isomorphism(fuse(V_east) ← V_east)
-	@tensor braket[P P'; N E S W] := conj(peps[P'; n' e' s' w']) * peps[P; n e s w] *
-		fuse_north[N; n n'] * fuse_east[E; e e'] * conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
+	
+	@tensor ketbra[P P'; N E S W] := 
+		conj(peps[P'; n' e' s' w']) * peps[P; n e s w] *
+		fuse_north[N; n n'] * fuse_east[E; e e'] *
+		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
 end
 
 # ╔═╡ f6acc633-d9ab-4cf5-b475-f608d0df13b2
@@ -902,8 +927,8 @@ end
 
 # ╔═╡ d007a99a-fb6a-4b76-9edc-949fa2787b8d
 function reduced_densitymatrix_1x2(peps, environment)
-	ρ_local = merge_ketbra(peps, peps)
-	return @tensor ρ[-1 -2; -3 -4] :=
+	ρ_local = merge_ketbra(peps)
+	return @tensor contractcheck = true ρ[-1 -2; -3 -4] :=
 		environment.edge_south[17 4; 1] *
 		environment.corner_southwest[1; 2] *
 		environment.edge_west[2 3; 5] *
@@ -918,29 +943,57 @@ function reduced_densitymatrix_1x2(peps, environment)
 		ρ_local[-2 -4; 11 10 14 16]
 end
 
+# ╔═╡ 4a65aa03-c385-4bfb-944c-911606a0e2ff
+function rotate_clockwise(peps::PEPSTensor)
+	@tensor peps′[p; N E S W] := peps[p; W N E S]
+end
+
 # ╔═╡ d97aae83-b513-4332-bc01-17fdd38b1381
 function reduced_densitymatrix_2x1(peps, environment)
 	peps_rotated = rotate_clockwise(peps)
-	environment_rotated = rotate_clockwise(peps, environment)
+	environment_rotated = rotate_clockwise(environment)
 	return reduced_densitymatrix_1x2(peps_rotated, environment_rotated)
 end
 
-# ╔═╡ f657e893-c238-419a-941a-f0ed9374e838
-function expectation_value_1x1(O, peps, environment)
+# ╔═╡ 001563e4-125c-46ba-97c0-c95b8bf25fec
+md"""
+## Transverse-field Ising model
+
+We now have all of the components to compute the energy for the [Transverse-field Ising model](https://en.wikipedia.org/wiki/Transverse-field_Ising_model).
+
+```math
+H = -J \left(\sum_{\langle i, j} Z_i ⊗ Z_j + g \sum_i X_i \right)
+```
+
+In particular, we find three non-equivalent terms that we have to compute, the onsite term containing `X_i`, as well as the horizontal and vertical twosite terms containing `Z_i ⊗ Z_j`
+"""
+
+# ╔═╡ 9d31d315-3997-4453-98ef-bc4fedd45105
+function onsite_energy(peps, environment; J = 1.0, g = 1.0)
 	ρ = reduced_densitymatrix_1x1(peps, environment)
-	return tr(O * ρ) / tr(ρ)
+	return -(J * g) * tr(X * ρ) / tr(ρ)
 end
 
-# ╔═╡ 1c8c0edc-4ea6-470a-8b6c-ad4e9e2cb230
-function expectation_value_1x2(O, peps, environment)
+# ╔═╡ 80457440-8a86-4842-b5af-20af852a0236
+function horizontal_energy(peps, environment)
+	ZZ = Z ⊗ Z
 	ρ = reduced_densitymatrix_1x2(peps, environment)
-	return tr(O * ρ) / tr(ρ)
+	return tr(ZZ * ρ) / tr(ρ)
 end
 
-# ╔═╡ 085669a2-0c44-4df2-93ce-475be4e45579
-function expectation_value_2x1(O, peps, environment)
-	ρ = reduced_densitymatrix_1x1(peps, environment)
-	return tr(O * ρ) / tr(ρ)
+# ╔═╡ 49dd1b84-8130-4c52-94e0-831efca34ccb
+function vertical_energy(peps, environment)
+	ZZ = Z ⊗ Z
+	ρ = reduced_densitymatrix_2x1(peps, environment)
+	return tr(ZZ * ρ) / tr(ρ)
+end
+
+# ╔═╡ f14e8ba9-d692-46da-be7b-3ac79af5d744
+function ising_energy(peps, environment; J = 1.0, g = 1.0)
+	E_onsite = onsite_energy(peps, environment)
+	E_horizontal = horizontal_energy(peps, environment)
+	E_vertical = vertical_energy(peps, environment)
+	return -J * ((E_horizontal + E_vertical) / 2 + g * E_onsite) 
 end
 
 # ╔═╡ 06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
@@ -955,12 +1008,31 @@ For this to work, on the one hand we need to define our optimization landscape b
 # ╔═╡ cb153168-3a38-42b1-a2e5-4b5cd1062e49
 md"""
 ## Optimization Manifold
-Since we plan on making use of automatic differentiation to pr
+Since we plan on making use of automatic differentiation to provide
 """
 
 # ╔═╡ e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 md"""
 ## Gradient and Loss Function
+
+For the loss function, we already have all of the components that we need to start from a single PEPS tensor, and end up with the energy computed from the Ising model Hamiltonian.
+We just need to put the pieces together as follows:
+"""
+
+# ╔═╡ 2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
+md"""
+Then, we will use automatic differentiation to obtain the gradient.
+For this, we will use Zygote.jl and reverse-mode automatic differentiation as a black-box way to obtain the gradient.
+Therefore, our total loss function and gradient simply looks like:
+"""
+
+# ╔═╡ 8cc7c8f8-59fe-45d1-b50f-3651f24e5c6e
+real_inner(_, η₁, η₂) = real(dot(η₁, η₂))
+
+# ╔═╡ a6a226c4-f212-4dce-8ec2-56242028bb96
+md"""
+!!! warning
+	Because of technical reasons, Zygote is currently not compatible with Julia v1.12, so we require v1.10 or v1.11 to make this next part work.
 """
 
 # ╔═╡ 209aa00c-0281-4e8c-b32c-d77888e8a5ae
@@ -1011,6 +1083,58 @@ test_doublepeps = merge_braket(test_peps)
 # ╔═╡ f560e045-433f-4562-a611-119ce410342f
 test_environment = initialize_random_environment(test_doublepeps, ComplexSpace(4))
 
+# ╔═╡ 71526bec-030b-476c-a264-db69f858aeb7
+function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; maxdim::Int = 10)
+	@tensor L[-1 -2; -3 -4] :=
+        environments.edge_south[-1 3; 1] *
+		environments.corner_southwest[1; 2] *
+		environments.edge_west[2 4; 5] *
+		peps[4 3; 6 -2] *
+		environments.edge_west[5 7; 8] *
+		peps[7 6; 9 -4] *
+		environments.corner_northwest[8; 10] *
+		environments.edge_north[10 9; -3]
+	
+	@tensor R[-1 -2; -3 -4] :=
+		environments.edge_north[-1 3; 1] *
+		environments.corner_northeast[1; 2] *
+		environments.edge_east[2 4; 5] *
+		peps[-2 6; 3 4] *
+		environments.edge_east[5 7; 8] *
+		peps[-4 9; 6 7] *
+		environments.corner_southeast[8; 10] *
+		environments.edge_south[10 9; -3]
+
+	M = L * R
+	U, Σ, Vᴴ = svd_trunc(M; trunc = truncrank(maxdim) & trunctol(; atol = 1e-8))
+	Σ_invsqrt = inv(sqrt(Σ))
+	PR = R * Vᴴ' * Σ_invsqrt
+	PL = Σ_invsqrt * U' * L
+
+	return PR, PL
+end
+
+# ╔═╡ 941cfb90-087e-48ea-93df-8e72aaaaff8b
+let
+	test_result = ctmrg_projectors(test_environment, test_doublepeps; maxdim = 10)
+	actual_result = ctmrg_projectors_solution(test_environment, test_doublepeps; maxdim = 10)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		PR, PL = test_result
+		PR′, PL′ = actual_result
+		if (space(PR) != space(PR′)) || (space(PL) != space(PL′))
+			almost(md"The spaces of (one of) the output tensors are not correct. Make sure to put the indices in the correct order and take the proper truncation dimension in mind.")
+		elseif (PR ≈ PR′) && (PL ≈ PL′)
+			correct()
+		else
+			keep_working()
+		end
+	end
+end
+
 # ╔═╡ b9ae7480-9341-4293-b615-d4b353ca39ed
 function ctmrg_expand_solution(environment, peps::DoublePEPSTensor)
 	@tensor C_northwest[s; w1 w2] := environment.edge_west[s w2; n] * environment.corner_northwest[n; w1]
@@ -1040,64 +1164,12 @@ let
 	end
 end
 
-# ╔═╡ 71526bec-030b-476c-a264-db69f858aeb7
-function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; maxdim::Int = 10)
-	@tensor L[-1 -2; -3 -4] :=
-        environments.edge_south[-1 3; 1] *
-		environments.corner_southwest[1; 2] *
-		environments.edge_west[2 4; 5] *
-		peps[4 3; 6 -2] *
-		environments.edge_west[5 7; 8] *
-		peps[7 6; 9 -4] *
-		environments.corner_northwest[8; 10] *
-		environments.edge_north[10 9; -3]
-	
-	@tensor R[-1 -2; -3 -4] :=
-		environments.edge_north[-1 3; 1] *
-		environments.corner_northeast[1; 2] *
-		environments.edge_east[2 4; 5] *
-		peps[-2 6; 3 4] *
-		environments.edge_east[5 7; 8] *
-		peps[-4 9; 6 7] *
-		environments.corner_southeast[8; 10] *
-		environments.edge_south[10 9; -3]
-
-	M = L * R
-	U, Σ, Vᴴ = svd_trunc(M; trunc = truncrank(maxdim))
-	Σ_invsqrt = inv(sqrt(Σ))
-	PR = R * Vᴴ' * Σ_invsqrt
-	PL = Σ_invsqrt * U' * L
-
-	return PR, PL
-end
-
-# ╔═╡ 941cfb90-087e-48ea-93df-8e72aaaaff8b
-let
-	test_result = ctmrg_projectors(test_environment, test_doublepeps; maxdim = 10)
-	actual_result = ctmrg_projectors_solution(test_environment, test_doublepeps; maxdim = 10)
-	if ismissing(test_result)
-		still_missing()
-	elseif typeof(test_result) !== typeof(actual_result)
-		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
-	else
-		PR, PL = test_result
-		PR′, PL′ = actual_result
-		if (space(PR) != space(PR′)) || (space(PL) != space(PL′))
-			almost(md"The spaces of (one of) the output tensors are not correct. Make sure to put the indices in the correct order and take the proper truncation dimension in mind.")
-		elseif (PR ≈ PR′) && (PL ≈ PL′)
-			correct()
-		else
-			keep_working()
-		end
-	end
-end
-
 # ╔═╡ 99fad623-4b57-4aad-bc3a-66230fb81034
 function ctmrg_renormalize_solution(C_northwest, E_north, C_northeast, PR, PL)
 	C_northwest′ = C_northwest * PR
 	@tensor E_north′[-1 -2; -3] := PL[-1; 3 4] * E_north[3 4 -2; 1 2] * PR[1 2; -3]
 	C_northeast′ = PL * C_northeast
-	return normalize(C_northwest′), normalize(E_north′), normalize(C_northeast′)
+	return C_northwest′ / norm(C_northwest′), E_north′ / norm(E_north′), C_northeast′ / norm(C_northeast′)
 end
 
 # ╔═╡ 49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
@@ -1124,6 +1196,11 @@ function rotate_clockwise_solution(environment::CTMRGEnvironment)
 		environment.edge_west, environment.edge_north, environment.edge_east, environment.edge_south,
 		environment.corner_southwest, environment.corner_northwest, environment.corner_northeast, environment.corner_southeast
 	)
+end
+
+# ╔═╡ 21137319-da99-42df-ade3-7e3d808f9bc3
+function rotate_clockwise_solution(ρ::AbstractTensorMap{<:Any, <:Any, 2, 4})
+	@tensor ρ′[p p'; W N E S] := ρ[p p'; N E S W]
 end
 
 # ╔═╡ b986149d-055a-4588-a08f-e2a86e803a38
@@ -1257,6 +1334,140 @@ let
 	end
 end
 
+# ╔═╡ ee11b4f1-b048-4bf8-9dc4-2bdd4f44239f
+function ctmrg_convergence_solution(env1, env2)
+	return maximum(fieldnames(CTMRGEnvironment)) do f
+		t1 = getproperty(env1, f)
+		t2 = getproperty(env2, f)
+		return singular_value_distance_solution(svd_vals(t1), svd_vals(t2))
+	end
+end
+
+# ╔═╡ 6adac67a-3382-4ccd-bddd-6f7882a722ea
+function ctmrg_solution(environment, peps; maxiter = 100, tol = 1e-6, kwargs...)
+	# @info "Starting CTMRG"
+
+	for iter in 1:maxiter
+		environment_new = ctmrg_iteration_solution(environment, peps; kwargs...)
+		χ = maximal_chi(environment_new)
+		svd_distance = ctmrg_convergence_solution(environment, environment_new)
+		# @info "Iteration $iter" χ svd_distance
+		environment = environment_new
+		svd_distance <= tol && break
+	end
+
+	return environment
+end
+
+# ╔═╡ 55e6c29b-2e62-4b86-8d76-ca94900878f0
+"""
+
+
+"""
+function loss_function(peps::PEPSTensor; maxdim = 10, J = 1.0, g = 0.5)
+	double_peps = merge_braket(peps)
+	environments = initialize_random_environment(double_peps, ℂ^maxdim)
+	environments = ctmrg_solution(environments, double_peps)
+	return real(ising_energy(peps, environments; J, g))
+end
+
+# ╔═╡ 92008604-9dcf-470c-9ff2-73a485b276f4
+function merge_ketbra_solution(peps::PEPSTensor)
+	V_north = space(peps, 2) ⊗ space(peps, 2)'
+	fuse_north = isomorphism(fuse(V_north) ← V_north)
+	
+	V_east = space(peps, 3) ⊗ space(peps, 3)'
+	fuse_east = isomorphism(fuse(V_east) ← V_east)
+	
+	@tensor braket[P P'; N E S W] := 
+		conj(peps[P'; n' e' s' w']) * peps[P; n e s w] *
+		fuse_north[N; n n'] * fuse_east[E; e e'] *
+		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
+end
+
+# ╔═╡ ea14479b-91d0-4fa9-942b-a147e1649d4c
+function reduced_densitymatrix_1x1_solution(ρ_local, environment)
+	return @tensor ρ[-1; -2] :=
+		environment.edge_west[11 3; 1] *
+		environment.corner_northwest[1; 2] *
+		environment.edge_north[2 4; 5] *
+		environment.corner_northeast[5; 6] *
+		environment.edge_east[6 7; 8] *
+		environment.corner_southeast[8; 9] *
+		environment.edge_south[9 10; 11] *
+		ρ_local[-1 -2; 4 7 10 3]
+end
+
+# ╔═╡ 5999904e-d69e-4f16-950e-0762432291ba
+function reduced_densitymatrix_1x2_solution(ρ_local, environment)
+	return @tensor contractcheck = true ρ[-1 -2; -3 -4] :=
+		environment.edge_south[17 4; 1] *
+		environment.corner_southwest[1; 2] *
+		environment.edge_west[2 3; 5] *
+		environment.corner_northwest[5; 6] *
+		environment.edge_north[6 7; 15] *
+		ρ_local[-1 -3; 7 16 4 3] *
+		environment.edge_north[15 11; 8] *
+		environment.corner_northeast[8; 9] *
+		environment.edge_east[9 10; 12] *
+		environment.corner_southeast[12; 13] *
+		environment.edge_south[13 14; 17] *
+		ρ_local[-2 -4; 11 10 14 16]
+end
+
+# ╔═╡ 343a1597-3192-4d5b-aa9c-276258ccc04f
+function reduced_densitymatrix_2x1_solution(ρ_local, environment)
+	ρ_rotated = rotate_clockwise_solution(ρ_local)
+	environment_rotated = rotate_clockwise_solution(environment)
+	return reduced_densitymatrix_1x2_solution(ρ_rotated, environment_rotated)
+end
+
+# ╔═╡ 7fa96f51-db47-40c0-b2b0-df0e4fe1a326
+function ising_energy_solution(peps, environment; J = 1.0, g = 1.0)
+	ρ_local = merge_ketbra(peps)
+	
+	ZZ = Z ⊗ Z
+	ρ = reduced_densitymatrix_1x2_solution(ρ_local, environment)
+	E_horizontal = -(J / 2) * tr(ZZ * ρ) / tr(ρ)
+
+	ρ = reduced_densitymatrix_2x1_solution(ρ_local, environment)
+	E_vertical = -(J / 2) * tr(ZZ * ρ) / tr(ρ)
+
+	ρ = reduced_densitymatrix_1x1_solution(ρ_local, environment)
+	E_onsite = -(J * g) * tr(X * ρ) / tr(ρ)
+	
+	return E_horizontal + E_vertical + E_onsite
+end
+
+# ╔═╡ 17367770-d24f-4cba-a87c-2e379ec24ffb
+let d = 2, D = 3, χ = 4
+	peps = initialize_peps(Float64, ℂ^d, ℂ^D)
+	dpeps = merge_braket(peps)
+	envs = initialize_random_environment(dpeps, ℂ^χ)
+	# envs = ctmrg_solution(envs, dpeps; maxdim = χ, maxiter = 10)
+	J = g = 1.0
+	ising_energy_solution(peps, envs; J, g)
+end
+
+# ╔═╡ a4e00e0a-af1b-4a3f-997f-381bcbf9932d
+function loss_function_solution(peps::PEPSTensor; maxdim = 10, J = 1.0, g = 0.5)
+	double_peps = merge_braket(peps)
+	environments = initialize_random_environment(double_peps, ℂ^maxdim)
+	environments = ctmrg_solution(environments, double_peps)
+	return real(ising_energy_solution(peps, environments; J, g))
+end
+
+# ╔═╡ 36832d3a-10cb-4d3a-b362-1505312e2c4d
+groundstate, energy, ∂loss, numfg, convergence_history = optimize(
+        test_peps, LBFGS(); inner = real_inner,
+    ) do peps
+		E, grads = withgradient(loss_function_solution, peps)
+		return E, only(grads)
+end
+
+# ╔═╡ 70a91307-eb9e-4c1a-bb4f-37731c882004
+loss_function_solution(initialize_peps(Float64, ℂ^2, ℂ^3))
+
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
@@ -1280,9 +1491,9 @@ Zygote = "~0.7.10"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.4"
+julia_version = "1.10.10"
 manifest_format = "2.0"
-project_hash = "22f32bb2c8b5712cd4e6dfad07a7227606eeb5db"
+project_hash = "abbd62fe6a746a08938f120a86966a704151bda2"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -1341,11 +1552,10 @@ version = "4.4.0"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
-version = "1.1.2"
+version = "1.1.1"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
-version = "1.11.0"
 
 [[deps.BangBang]]
 deps = ["Accessors", "ConstructionBase", "InitialValues", "LinearAlgebra"]
@@ -1371,7 +1581,6 @@ version = "0.4.6"
 
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
-version = "1.11.0"
 
 [[deps.ChainRules]]
 deps = ["Adapt", "ChainRulesCore", "Compat", "Distributed", "GPUArraysCore", "IrrationalConstants", "LinearAlgebra", "Random", "RealDot", "SparseArrays", "SparseInverseSubset", "Statistics", "StructArrays", "SuiteSparse"]
@@ -1399,10 +1608,12 @@ deps = ["FixedPointNumbers", "Random"]
 git-tree-sha1 = "67e11ee83a43eb71ddc950302c53bf33f0690dfe"
 uuid = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
 version = "0.12.1"
-weakdeps = ["StyledStrings"]
 
     [deps.ColorTypes.extensions]
     StyledStringsExt = "StyledStrings"
+
+    [deps.ColorTypes.weakdeps]
+    StyledStrings = "f489334b-da3d-4c2e-b8f0-e476e12c162b"
 
 [[deps.CommonSubexpressions]]
 deps = ["MacroTools"]
@@ -1423,7 +1634,7 @@ weakdeps = ["Dates", "LinearAlgebra"]
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.3.0+1"
+version = "1.1.1+0"
 
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
@@ -1462,7 +1673,6 @@ version = "1.0.0"
 [[deps.Dates]]
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
-version = "1.11.0"
 
 [[deps.DiffResults]]
 deps = ["StaticArraysCore"]
@@ -1479,7 +1689,6 @@ version = "1.15.1"
 [[deps.Distributed]]
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
-version = "1.11.0"
 
 [[deps.DocStringExtensions]]
 git-tree-sha1 = "7442a5dfe1ebb773c29cc2962a8980f47221d76c"
@@ -1489,11 +1698,10 @@ version = "0.9.5"
 [[deps.Downloads]]
 deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
-version = "1.7.0"
+version = "1.6.0"
 
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
-version = "1.11.0"
 
 [[deps.FillArrays]]
 deps = ["LinearAlgebra"]
@@ -1593,7 +1801,6 @@ version = "0.1.3"
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
-version = "1.11.0"
 
 [[deps.InverseFunctions]]
 git-tree-sha1 = "a779299d77cd080bf77b97535acecd73e1c5e5cb"
@@ -1626,11 +1833,6 @@ deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "b6893345fd6658c8e475d40155789f4860ac3b21"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
 version = "3.1.4+0"
-
-[[deps.JuliaSyntaxHighlighting]]
-deps = ["StyledStrings"]
-uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
-version = "1.12.0"
 
 [[deps.LRUCache]]
 git-tree-sha1 = "5519b95a490ff5fe629c4a7aa3b3dfc9160498b3"
@@ -1670,33 +1872,30 @@ uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
 version = "0.6.4"
 
 [[deps.LibCURL_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll", "Zlib_jll", "nghttp2_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "8.15.0+0"
+version = "8.4.0+0"
 
 [[deps.LibGit2]]
-deps = ["LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
+deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
-version = "1.11.0"
 
 [[deps.LibGit2_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
 uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
-version = "1.9.0+0"
+version = "1.6.4+0"
 
 [[deps.LibSSH2_jll]]
-deps = ["Artifacts", "Libdl", "OpenSSL_jll"]
+deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.11.3+1"
+version = "1.11.0+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
-version = "1.11.0"
 
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-version = "1.12.0"
 
 [[deps.LogExpFunctions]]
 deps = ["DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
@@ -1716,7 +1915,6 @@ version = "0.3.29"
 
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
-version = "1.11.0"
 
 [[deps.MIMEs]]
 git-tree-sha1 = "c64d943587f7187e751162b3b84445bbbd79f691"
@@ -1729,9 +1927,8 @@ uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 version = "0.5.16"
 
 [[deps.Markdown]]
-deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
+deps = ["Base64"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
-version = "1.11.0"
 
 [[deps.MatrixAlgebraKit]]
 deps = ["LinearAlgebra"]
@@ -1755,9 +1952,14 @@ version = "0.6.2"
     GenericSchur = "c145ed77-6b09-5dd9-b285-bf645a82121e"
     Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
 
+[[deps.MbedTLS_jll]]
+deps = ["Artifacts", "Libdl"]
+uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
+version = "2.28.2+1"
+
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2025.11.4"
+version = "2023.1.10"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
@@ -1767,7 +1969,7 @@ version = "1.1.3"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
-version = "1.3.0"
+version = "1.2.0"
 
 [[deps.OhMyThreads]]
 deps = ["BangBang", "ChunkSplitters", "ScopedValues", "StableTasks", "TaskLocalValues"]
@@ -1782,17 +1984,12 @@ weakdeps = ["Markdown"]
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.29+0"
+version = "0.3.23+4"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.7+0"
-
-[[deps.OpenSSL_jll]]
-deps = ["Artifacts", "Libdl"]
-uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
-version = "3.5.4+0"
+version = "0.8.5+0"
 
 [[deps.OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl"]
@@ -1818,15 +2015,9 @@ version = "1.0.2"
 weakdeps = ["Requires", "TOML"]
 
 [[deps.Pkg]]
-deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
+deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "Random", "SHA", "Serialization", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.12.1"
-
-    [deps.Pkg.extensions]
-    REPLExt = "REPL"
-
-    [deps.Pkg.weakdeps]
-    REPL = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
+version = "1.10.0"
 
 [[deps.PlutoTeachingTools]]
 deps = ["Downloads", "HypertextLiteral", "Latexify", "Markdown", "PlutoUI"]
@@ -1842,9 +2033,9 @@ version = "0.7.77"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
-git-tree-sha1 = "07a921781cab75691315adc645096ed5e370cb77"
+git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
 uuid = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
-version = "1.3.3"
+version = "1.2.1"
 
 [[deps.Preferences]]
 deps = ["TOML"]
@@ -1861,17 +2052,19 @@ version = "0.5.7"
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
-version = "1.11.0"
 
 [[deps.PtrArrays]]
 git-tree-sha1 = "1d36ef11a9aaf1e8b74dacc6a731dd1de8fd493d"
 uuid = "43287f4e-b6f4-7ad1-bb20-aadabca52c3d"
 version = "1.3.0"
 
+[[deps.REPL]]
+deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
+uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
+
 [[deps.Random]]
 deps = ["SHA"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-version = "1.11.0"
 
 [[deps.RationalRoots]]
 git-tree-sha1 = "e5f5db699187a4810fda9181b34250deeedafd81"
@@ -1907,16 +2100,14 @@ version = "1.5.0"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
-version = "1.11.0"
 
 [[deps.Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
-version = "1.11.0"
 
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-version = "1.12.0"
+version = "1.10.0"
 
 [[deps.SparseInverseSubset]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
@@ -1945,14 +2136,9 @@ uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
 version = "1.4.4"
 
 [[deps.Statistics]]
-deps = ["LinearAlgebra"]
-git-tree-sha1 = "ae3bb1eb3bba077cd276bc5cfc337cc65c3075c0"
+deps = ["LinearAlgebra", "SparseArrays"]
 uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-version = "1.11.1"
-weakdeps = ["SparseArrays"]
-
-    [deps.Statistics.extensions]
-    SparseArraysExt = ["SparseArrays"]
+version = "1.10.0"
 
 [[deps.Strided]]
 deps = ["LinearAlgebra", "StridedViews", "TupleTools"]
@@ -1995,10 +2181,6 @@ version = "0.7.2"
     SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
     StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
-[[deps.StyledStrings]]
-uuid = "f489334b-da3d-4c2e-b8f0-e476e12c162b"
-version = "1.11.0"
-
 [[deps.SuiteSparse]]
 deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
 uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
@@ -2006,7 +2188,7 @@ uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 [[deps.SuiteSparse_jll]]
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "7.8.3+2"
+version = "7.2.1+1"
 
 [[deps.TOML]]
 deps = ["Dates"]
@@ -2081,7 +2263,6 @@ version = "5.4.0"
 [[deps.Test]]
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-version = "1.11.0"
 
 [[deps.Tricks]]
 git-tree-sha1 = "311349fd1c93a31f783f977a71e8b062a57d4101"
@@ -2101,11 +2282,9 @@ version = "1.6.1"
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
 uuid = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
-version = "1.11.0"
 
 [[deps.Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
-version = "1.11.0"
 
 [[deps.VectorInterface]]
 deps = ["LinearAlgebra"]
@@ -2122,7 +2301,7 @@ version = "2.0.0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.3.1+2"
+version = "1.2.13+1"
 
 [[deps.Zygote]]
 deps = ["AbstractFFTs", "ChainRules", "ChainRulesCore", "DiffRules", "Distributed", "FillArrays", "ForwardDiff", "GPUArraysCore", "IRTools", "InteractiveUtils", "LinearAlgebra", "LogExpFunctions", "MacroTools", "NaNMath", "PrecompileTools", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "ZygoteRules"]
@@ -2151,17 +2330,17 @@ version = "0.2.7"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.15.0+0"
+version = "5.11.0+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.64.0+1"
+version = "1.52.0+1"
 
 [[deps.p7zip_jll]]
-deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
+deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.7.0+0"
+version = "17.4.0+2"
 """
 
 # ╔═╡ Cell order:
@@ -2185,6 +2364,8 @@ version = "17.7.0+0"
 # ╟─439133a3-10c6-4da6-a671-38d2453d086b
 # ╟─d05ac00c-1e69-4952-9629-80468f02096d
 # ╠═30e688b4-293f-40af-a839-31fabec981cc
+# ╠═7777f7a1-76b8-4331-bceb-0a4c345f0710
+# ╠═5fd30785-d1b1-47fb-8476-d89a4262046b
 # ╟─d73e61f1-622e-49b2-97bb-dec56807d117
 # ╟─f9a33166-f457-4cf9-9409-9917c23d51fe
 # ╟─aee1fb88-0631-483f-a7fd-7ecf8c66f06b
@@ -2244,32 +2425,52 @@ version = "17.7.0+0"
 # ╠═8c32a473-4f08-4955-bdea-25cef4490de0
 # ╟─8afc3b09-84fe-4966-823d-464805edc66f
 # ╟─df668aea-2156-40f4-8dbd-2a442e863210
+# ╟─7e74bbd4-d62e-42ea-9c44-6106c5b9f860
 # ╟─67503430-d5d1-4ee6-847f-4b7dbecdf7ed
-# ╟─80907dcf-e9b6-47e8-89e9-f9e69a23ee63
-# ╟─f6acc633-d9ab-4cf5-b475-f608d0df13b2
-# ╟─d007a99a-fb6a-4b76-9edc-949fa2787b8d
-# ╟─d97aae83-b513-4332-bc01-17fdd38b1381
-# ╠═f657e893-c238-419a-941a-f0ed9374e838
-# ╠═1c8c0edc-4ea6-470a-8b6c-ad4e9e2cb230
-# ╠═085669a2-0c44-4df2-93ce-475be4e45579
-# ╠═06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
-# ╠═7eb8edae-9d1b-4311-af50-6a258840f8eb
+# ╠═80907dcf-e9b6-47e8-89e9-f9e69a23ee63
+# ╠═f6acc633-d9ab-4cf5-b475-f608d0df13b2
+# ╠═d007a99a-fb6a-4b76-9edc-949fa2787b8d
+# ╠═4a65aa03-c385-4bfb-944c-911606a0e2ff
+# ╠═d97aae83-b513-4332-bc01-17fdd38b1381
+# ╠═001563e4-125c-46ba-97c0-c95b8bf25fec
+# ╠═9d31d315-3997-4453-98ef-bc4fedd45105
+# ╠═80457440-8a86-4842-b5af-20af852a0236
+# ╠═49dd1b84-8130-4c52-94e0-831efca34ccb
+# ╠═f14e8ba9-d692-46da-be7b-3ac79af5d744
+# ╠═17367770-d24f-4cba-a87c-2e379ec24ffb
+# ╟─06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
 # ╠═cb153168-3a38-42b1-a2e5-4b5cd1062e49
-# ╠═d6e0fb57-f686-4400-aa92-748288e0591d
+# ╠═7eb8edae-9d1b-4311-af50-6a258840f8eb
 # ╠═e58ed93c-4b37-44c4-8269-bb8cb039b4fa
-# ╠═209aa00c-0281-4e8c-b32c-d77888e8a5ae
+# ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
+# ╠═2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
+# ╠═8cc7c8f8-59fe-45d1-b50f-3651f24e5c6e
+# ╠═36832d3a-10cb-4d3a-b362-1505312e2c4d
+# ╠═a6a226c4-f212-4dce-8ec2-56242028bb96
+# ╠═70a91307-eb9e-4c1a-bb4f-37731c882004
+# ╠═d6e0fb57-f686-4400-aa92-748288e0591d
+# ╟─209aa00c-0281-4e8c-b32c-d77888e8a5ae
 # ╟─b333c5f9-ba3d-429c-9403-37d1f9fb7360
 # ╟─dececc2a-5b73-4ad8-8056-e5c0a97a230f
 # ╠═f897eafd-d376-4ed9-811b-76290bf11280
 # ╠═14f49304-2286-48aa-b1b7-07a2e6f03cfe
 # ╠═f560e045-433f-4562-a611-119ce410342f
-# ╠═b9ae7480-9341-4293-b615-d4b353ca39ed
+# ╟─6adac67a-3382-4ccd-bddd-6f7882a722ea
 # ╠═71526bec-030b-476c-a264-db69f858aeb7
-# ╠═99fad623-4b57-4aad-bc3a-66230fb81034
-# ╠═49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
-# ╠═ada2cab6-fc02-4b05-a7d5-edbbae746dde
-# ╠═48270af5-c36a-499d-b0c1-f688820e7b84
-# ╠═3411519b-ac28-4983-b477-026c8d015b97
+# ╟─b9ae7480-9341-4293-b615-d4b353ca39ed
+# ╟─99fad623-4b57-4aad-bc3a-66230fb81034
+# ╟─49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
+# ╟─ada2cab6-fc02-4b05-a7d5-edbbae746dde
+# ╟─48270af5-c36a-499d-b0c1-f688820e7b84
+# ╟─21137319-da99-42df-ade3-7e3d808f9bc3
+# ╟─3411519b-ac28-4983-b477-026c8d015b97
+# ╠═ee11b4f1-b048-4bf8-9dc4-2bdd4f44239f
 # ╠═80afa573-0cc0-4c7e-98d6-f58bdf9205d9
+# ╠═92008604-9dcf-470c-9ff2-73a485b276f4
+# ╠═ea14479b-91d0-4fa9-942b-a147e1649d4c
+# ╠═5999904e-d69e-4f16-950e-0762432291ba
+# ╠═343a1597-3192-4d5b-aa9c-276258ccc04f
+# ╠═7fa96f51-db47-40c0-b2b0-df0e4fe1a326
+# ╠═a4e00e0a-af1b-4a3f-997f-381bcbf9932d
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
