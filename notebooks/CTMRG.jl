@@ -1204,8 +1204,8 @@ let
 		keep_working(md"The type of the output is not correct. Did you return the required outputs? Did you obtain the correct scalar type?")
 	else
 		spaces_equal = all(fieldnames(CTMRGEnvironment)) do f
-			t1 = get(test_result, f)
-			t2 = get(actual_result, f)
+			t1 = getproperty(test_result, f)
+			t2 = getproperty(actual_result, f)
 			return space(t1) == space(t2)
 		end
 		if spaces_equal
