@@ -429,8 +429,9 @@ md"""
 md"""
 # II. CTMRG
 
-
-Given an infinite 2D tensor network (e.g. the PEPS norm network), the exact contraction thereof is intractable.
+Now that we are comfortable (maybe?) with working with TensorKit.jl, we are ready to put this in action in the context of PEPS.
+In particular, we wish to start contracting various local observables for infinite 2D networks.
+Given such a tensor network (e.g. the PEPS norm network), the exact contraction thereof is already intractable for moderately-sized finite PEPS, and clearly impossible for an infinitely repeating network.
 Instead, CTMRG approximates the infinite environment around a local region by a finite set of tensors:
 
 - Four **corner tensors**: `corner_northwest, corner_northeast, corner_southeast, corner_southwest`
@@ -449,30 +450,21 @@ In practice, CTMRG is an iterative fixed-point method:
 - Then **compresses** it back to bond dimension `χ` using an isometry derived from an effective reduced density matrix (or equivalent construction),
 - Repeats until the boundary tensors stop changing (up to normalization / gauge).
 
-### Outline
-
-We will set up the algorithm as follows, following the typical steps of CTMRG:
-
-1. Conventions
-2. Initialization of the tensors
-3. Unidirectional CTMRG move
-4. The full CTMRG algorithm
-5. Expectation values
-6. Conclusions and extensions
+We will gradually build up the components required for this algorithm, which we can outline as follows:
 """
 
 # ╔═╡ df08983e-dab0-4a00-bf0c-4eb91f42f1fa
 md"""
-### Tensors and conventions
+## Conventions
 
-Converting this into code, we start by setting up some conventions for the tensors.
+In order to all more or less agree on the conventions, and to make testing the code easier, we will start by setting up some conventions for the various tensors.
 """
 
 # ╔═╡ 20f29190-2e0d-42e3-af82-11761478d29d
 """
     const PEPSTensor{T, S}
 
-Default type for PEPS tensors of element type `T` and space type `S`, with a single physical index, and 4 virtual indices, conventionally ordered as: ``T : P ← N ⊗ E ⊗ S ⊗ W``.
+Default type for PEPS tensors of element type `T` and space type `S`, with a single physical index, and 4 virtual indices, conventionally ordered as: ``P ← N ⊗ E ⊗ S ⊗ W``.
 Here, ``P`` denotes the physical space and ``N``, ``E``, ``S`` and ``W`` denote the north, east, south and west virtual spaces, respectively.
 
 ```
@@ -490,13 +482,14 @@ const PEPSTensor{T, S} = AbstractTensorMap{T, S, 1, 4}
 # ╔═╡ ab8cc3a0-0fd4-4f11-be1d-40b2a44f53d2
 md"""
 To make life a little easier in the remainder of this notebook, we will simplify the code by first mapping our double-layered network to a single-layer one, merging the PEPS tensors from the bra and ket together.
+Note however that this might not be optimal for performance, as the memory footprint of this tensor scales as ``D^8``.
 """
 
 # ╔═╡ d2c17a80-1c4a-49be-b615-ed6eb53b0779
 """
     const DoublePEPSTensor{T, S}
 
-Default type for double-layer PEPS tensors of element type `T` and space type `S`, with 4 virtual indices, conventionally ordered as: ``T : W ⊗ S ← N ⊗ E``.
+Default type for double-layer PEPS tensors of element type `T` and space type `S`, with 4 virtual indices, conventionally ordered as: ``W ⊗ S ← N ⊗ E``.
 Here, ``N``, ``E``, ``S`` and ``W`` denote the north, east, south and west doubled virtual spaces, respectively.
 
 ```
@@ -513,37 +506,38 @@ const DoublePEPSTensor{T, S} = AbstractTensorMap{T, S, 2, 2}
 
 # ╔═╡ a3a87f5e-da1a-45f2-b45b-8df484a30de8
 """
-	merge_braket(bra::PEPSTensor, ket::PEPSTensor=bra)::DoublePEPSTensor
+	merge_braket(peps::PEPSTensor)::DoublePEPSTensor
 
 Contract a bra and ket tensor over the physical index, while merging the virtual spaces together.
+See also the section on Combining and Splitting Indices.
 """
-function merge_braket(bra::PEPSTensor, ket::PEPSTensor=bra)
-	V_north = space(bra, 2) ⊗ space(ket, 2)'
+function merge_braket(peps::PEPSTensor)
+	V_north = space(peps, 2) ⊗ space(peps, 2)'
 	fuse_north = isomorphism(fuse(V_north) ← V_north)
-	V_east = space(bra, 3) ⊗ space(ket, 3)'
+	V_east = space(peps, 3) ⊗ space(peps, 3)'
 	fuse_east = isomorphism(fuse(V_east) ← V_east)
-	@tensor braket[S W; N E] := conj(bra[p; n' e' s' w']) * ket[p; n e s w] *
+	@tensor braket[S W; N E] := conj(peps[p; n' e' s' w']) * peps[p; n e s w] *
 		fuse_north[N; n n'] * fuse_east[E; e e'] * conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
 	return braket
 end
 
 # ╔═╡ 9da0bb7d-f918-40a1-871f-a546d7b5f641
 md"""
-As a result, we can define the CTMRG environment tensors immediately for this double-layer object, leading to a 3-index tensor for the edges, and a 2-index tensor for the corners.
+As a result, we can define the CTMRG environment tensors immediately for this double-layer object, leading to a 3-index tensor for the edges, and a 2-index tensor for the corners (as opposed to a 4-index tensor for the edges if we work with both layers separately).
 """
 
 # ╔═╡ c0862aa4-715b-412a-97ec-5bdf00a5fbdf
 """
     const EdgeTensor{T, S}
 
-Default type for double-layer CTMRG edge environment tensors of element type `T` and space type `S`, with indices conventionally ordered as: ``T : Vl ⊗ P ← Vr``.
-Here, ``Vl`` and ``Vr`` denote the left and right virtual environment spaces and ``P`` denotes the PEPS virtual space.
+Default type for double-layer CTMRG edge environment tensors of element type `T` and space type `S`, with indices conventionally ordered as: ``V_l ⊗ P ← V_r``.
+Here, ``V_l`` and ``V_r`` denote the left and right virtual environment spaces and ``P`` denotes the PEPS virtual space.
 
 ```
-Vl---- ----Vr
-     ╱ 
-    ╱  
-   P   
+V_l---- ----V_r
+      ╱ 
+     ╱  
+    P   
 ```
 """
 const EdgeTensor{T, S} = AbstractTensorMap{T, S, 2, 1}
@@ -552,11 +546,11 @@ const EdgeTensor{T, S} = AbstractTensorMap{T, S, 2, 1}
 """
     const CornerTensor{T, S}
 
-Default type for double-layer CTMRG corner environment tensors of element type `T` and space type `S`, with indices conventionally ordered as: ``T : Vl ← Vr``.
-Here, ``Vl`` and ``Vr`` denote the left and right virtual environment spaces.
+Default type for double-layer CTMRG corner environment tensors of element type `T` and space type `S`, with indices conventionally ordered as: ``V_l ← V_r``.
+Here, ``V_l`` and ``V_r`` denote the left and right virtual environment spaces.
 
 ```
-Vl ---- ---- Vr
+V_l --- --- V_r
 ```
 """
 const CornerTensor{T, S} = AbstractTensorMap{T, S, 1, 1}
@@ -584,16 +578,6 @@ Struct to represent the combined double layer infinite PEPS built from a uniform
 """
 struct InfiniteDoublePEPS{A <: DoublePEPSTensor}
     tensor::A
-end
-
-# ╔═╡ 82fa0408-7690-41db-8ced-823aeb662974
-"""
-	merge_braket(bra::InfinitePEPS, ket::InfinitePEPS = bra)::InfiniteDoublePEPS
-
-Contract a bra and ket InfinitePEPS over their physical indices, while merging the virtual spaces together.
-"""
-function merge_braket(bra::InfinitePEPS, ket::InfinitePEPS=bra)
-    return InfiniteDoublePEPS(merge_braket(bra.tensor, ket.tensor))
 end
 
 # ╔═╡ b2b002e3-5c08-4cc6-89c3-07870bf666d7
@@ -642,7 +626,7 @@ function initialize_peps(T, physicalspace, north_virtualspace, east_virtualspace
 	south_virtualspace = north_virtualspace'
 	west_virtualspace = east_virtualspace'
     peps_tensor = randn(T, physicalspace ← north_virtualspace ⊗ east_virtualspace ⊗ south_virtualspace ⊗ west_virtualspace)
-	return InfinitePEPS(peps_tensor)
+	return peps_tensor
 end
 
 # ╔═╡ ec6e77bb-0fc5-4730-85af-c37d15b2aeed
@@ -657,13 +641,13 @@ The easiest way to implement this is to simply start from a completely random en
 
 Randomly initialize the environment tensors for a given double-layer PEPS and environment bond dimension.
 """
-function initialize_random_environment(double_peps::InfiniteDoublePEPS, boundary_virtualspace)
-	T = scalartype(double_peps.tensor)
+function initialize_random_environment(double_peps::DoublePEPSTensor, boundary_virtualspace)
+	T = scalartype(double_peps)
 	
-	north_virtualspace = space(double_peps.tensor, 3)'
-	east_virtualspace = space(double_peps.tensor, 4)'
-	south_virtualspace = space(double_peps.tensor, 2)'
-	west_virtualspace = space(double_peps.tensor, 1)'
+	north_virtualspace = space(double_peps, 3)'
+	east_virtualspace = space(double_peps, 4)'
+	south_virtualspace = space(double_peps, 2)'
+	west_virtualspace = space(double_peps, 1)'
 	
 	edge_north = randn(T, boundary_virtualspace ⊗ north_virtualspace ← boundary_virtualspace)
 	edge_east = randn(T, boundary_virtualspace ⊗ east_virtualspace ← boundary_virtualspace)
@@ -681,34 +665,35 @@ function initialize_random_environment(double_peps::InfiniteDoublePEPS, boundary
 	)
 end
 
-# ╔═╡ 020b5d5f-cd1b-40a8-ae0e-4b8e3d15e594
-md"""
-## CTMRG steps
-
-Next we get to the main body of the algorithm.
-As mentioned, CTMRG is an iterative fixed-point method.
-Therefore, we can set up a skeleton for the algorithm as follows:
-"""
-
 # ╔═╡ 3983afb7-585b-4e43-aab1-de4ce47d685a
 md"""
-### Expansion
+## Expansion
 
+Next we get to the main body of the algorithm.
 The first part of each iteration consists of inserting one additional row or column in the network, containing a bra-ket tensor pair and two environment edges.
 After growing the network like that, we can obtain updated corner and edge tensors by contracting the added row into the environment.
 For example, here we absorb the west edge into the north-west corner, the bra-ket pair into the north edge and the east edge into the north-east corner:
 
-![CTMRG north expansion](https://github.com/lkdvos/PEPSTutorial/blob/main/notebooks/assets/expansion.jpeg?raw=true)
+$(PlutoUI.LocalResource("./assets/expansion.jpeg"))
 """
 
 # ╔═╡ effb78fe-894f-4b44-95ea-f3d80134bc75
-function ctmrg_expand(environment, peps)
+"""
+	ctmrg_expand(environment::CTMRGEnvironment, peps::DublePEPSTensor) -> C_northwest′, E_north′, C_northeast′
+
+Compute the expanded north corners and edge of the CTMRG environment by inserting a row into the network, and contracting the resulting tensors.
+These tensors should have the following shapes:
+- `C_northwest′`: ``V_χ ← V_χ ⊗ V_D``
+- `E_north′`: ``V_χ ⊗ V_D ⊗ V_D ← V_χ ⊗ V_D``
+- `C_northeast′`: ``V_χ ⊗ V_D ← V_χ``
+"""
+function ctmrg_expand(environment::CTMRGEnvironment, peps::DoublePEPSTensor)
 	missing
 end
 
 # ╔═╡ f5dd768c-97b4-48cc-be0c-ed36ffad371d
 md"""
-### Projection
+## Projection
 
 An important thing to note is that while we could simply merge some of the legs of the expanded environment tensors to obtain the same shape again, this would yield exponentially growing environment dimensions $χ$, quickly rendering this process untractable.
 Therefore, the CTMRG algorithm procedes by identifying an appropriate subspace of these expanded spaces, characterized by isometries.
@@ -724,21 +709,33 @@ and we wish to have a truncation of the following form that approximates this as
 
 This is achieved with a truncated singular value decomposition, and we can summarize this as follows:
 
-![CTMRG projectors](https://github.com/lkdvos/PEPSTutorial/blob/main/notebooks/assets/projection.jpeg?raw=true)
+
+$(PlutoUI.LocalResource("./assets/projection.jpeg"))
 """
 
 # ╔═╡ 607be339-8a6a-4a18-bbde-7775a349bbc1
-function ctmrg_projectors(environments, peps; maxdim::Int = 10)
+"""
+	ctmrg_projectors(environments::CTMRGEnvironments, peps::DoublePEPSTensor; maxdim::Integer = 10) -> PR, PL
+
+Compute the appropriate CTMRG projectors of a given maximal dimension by first contracting the left- and right half `L` and `R` of a 4x4 grid, and then performing a truncated singular value decomposition on the result.
+It can be convenient to choose the bipartition and indexorder of `L` and `R` such that no additional tensor contractions are required, and only matrix multiplications are involved.
+The shape of the output tensors should be:
+- `PR`: ``V_χ ⊗ V_D ← V_χ′``
+- `PL`: ``V_χ′ ← V_χ ⊗ V_D``
+"""
+function ctmrg_projectors(environments, peps; maxdim::Integer = 10)
 	missing
 end
 
 # ╔═╡ 1c6868d8-49aa-41a5-ac63-a09fa5e60fc4
 md"""
-### Renormalization
+## Renormalization
 
 Finally, we can make use of these constructors to reduce the expanded tensors back to a manageable dimension.
+To improve the numerical stability of our algorithm, we will choose to normalize the updated tensors such that they each have Frobenius norm `1`.
+For this, see also `normalize`.
 
-![CTMRG projectors](https://github.com/lkdvos/PEPSTutorial/blob/main/notebooks/assets/renormalization.jpeg?raw=true)
+$(PlutoUI.LocalResource("./assets/renormalization.jpeg"))
 """
 
 # ╔═╡ 0689c458-4352-4800-a7e2-29b9adfce426
@@ -754,49 +751,60 @@ md"""
 Bringing it all together, we can perform a single direction of the CTMRG algorithm as follows:
 """
 
-# ╔═╡ a5c48034-af8a-402f-bbf7-47c5d9aed52e
-function ctmrg_north_iteration(environment, peps; kwargs...)
+# ╔═╡ d7579195-063f-49a5-95b8-8e88dc823321
+"""
+	ctmrg_north_iteration(environment, peps; kwargs...) -> environment
+
+Expand the CTMRG environment along the north direction and return the updated, normalized environment after absorbing and renormalizing the additional row.
+"""
+function ctmrg_north_iteration(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
 	C_northwest, E_north, C_northeast = ctmrg_expand(environment, peps)
 	PR, PL = ctmrg_projectors(environment, peps; kwargs...)
-	C_northwest′, E_north′, C_northeast′ = ctmrg_renormalize(C_northwest, E_north, C_northeast, PR, PL)
-	return CTMRGEnvironment(E_north′, environment.edge_east, environment.edge_south, environment.edge_west, C_northwest′, C_northeast′, environment.corner_southeast, environment.corner_southwest)
+	C_northwest′, E_north′, C_northeast′ = ctmrg_renormalize(
+		C_northwest, E_north, C_northeast, PR, PL
+	)
+	return CTMRGEnvironment(
+		E_north′, environment.edge_east, environment.edge_south, environment.edge_west,
+		C_northwest′, C_northeast′, environment.corner_southeast, environment.corner_southwest
+	)
 end
 
 # ╔═╡ c410317c-9fd6-4c05-8053-544f24534a0f
 md"""
-### Rotation
+## Rotation
 
-In principle we can now repeat this process in the exact same way for the 3 other cardinal directions.
+In principle we can now repeat this process in the exact same way for the three other directions.
 However, this would be quite tedious, and instead we can simply rotate the environment as well as the state, and then re-use the methods we defined before.
 """
 
 # ╔═╡ e4bda769-1aaf-4bcc-a2ca-600adb988639
-function rotate_clockwise(peps::InfiniteDoublePEPS)
-	@tensor peps′[S E; W N] := peps.tensor[W S; N E]
-	return InfiniteDoublePEPS(peps′)
+function rotate_clockwise(peps::DoublePEPSTensor)
+	missing
 end
 
 # ╔═╡ f95272cc-1b29-479f-a1ec-3128bf393204
 function rotate_clockwise(environment::CTMRGEnvironment)
-	return CTMRGEnvironment(
-		environment.edge_west, environment.edge_north, environment.edge_east, environment.edge_south,
-		environment.corner_southwest, environment.corner_northwest, environment.corner_northeast, environment.corner_southeast
-	)
+	missing
 end
 
+# ╔═╡ 05e524c3-0369-4bea-8aea-eec522953d5f
+md"""
+Finally, we are ready to put all the pieces together and define the `ctmrg_iteration` function.
+"""
+
 # ╔═╡ f7bd71f9-f785-452a-a606-84d0f823f09d
-function ctmrg_iteration(environment, peps; kwargs...)
-	for direction in 1:4
-		environment = ctmrg_north_iteration(environment, peps; kwargs...)
-		environment = rotate_clockwise(environment)
-		peps = rotate_clockwise(peps)
-	end
-	return environment
+"""
+	ctmrg_iteration(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...) -> environment
+
+Compute the updated `CTMRGEnvironment`s obtained by expanding north followed by a rotation, repeated for each of the four directions.
+"""
+function ctmrg_iteration(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
+	missing
 end
 
 # ╔═╡ 3d4a07e4-f5c1-42d7-bc4d-a15a2fb36b66
 md"""
-### CTMRG Convergence
+## Convergence
 
 Since CTMRG is an iterative method, we expect to have to repeat the CTMRG steps until at some point we decide that the environments have sufficiently converged.
 However, we have to be slightly careful with our definition of convergence, since simply checking that two subsequent iterations have identical entries for all tensors runs into some problems.
@@ -805,12 +813,14 @@ Therefore, we instead consider a measure of convergence that is not affected by 
 """
 
 # ╔═╡ 8c32a473-4f08-4955-bdea-25cef4490de0
+"""
+	singular_value_distance(S1, S2)
+
+Given the singular value spectrum of two objects, compute their distance by taking the norm of their difference.
+Be careful, since the sizes of the inputs might not necessarily match, in which case missing entries should be treated as zeros.
+"""
 function singular_value_distance(S1, S2)
-	if space(S1) == space(S2)
-		return norm(S1 - S2)
-	else
-		return oftype(scalartype(S1), Inf)
-    end
+	missing
 end
 
 # ╔═╡ 2481bcb0-3c48-4d3e-97d4-5f00efd8ef2f
@@ -818,7 +828,7 @@ function ctmrg_convergence(env1, env2)
 	return maximum(fieldnames(CTMRGEnvironment)) do f
 		t1 = getproperty(env1, f)
 		t2 = getproperty(env2, f)
-		return singular_value_distance(svd_compact(t1)[2], svd_compact(t2)[2])
+		return singular_value_distance(svd_vals(t1), svd_vals(t2))
 	end
 end
 
@@ -836,19 +846,6 @@ function ctmrg(environment, peps; maxiter = 100, tol = 1e-6, kwargs...)
 	end
 
 	return environment
-end
-
-# ╔═╡ 3b69e064-185b-4c56-8e75-b062059f3f08
-md"""
-### Trying it out
-"""
-
-# ╔═╡ 31384227-6e84-4bf7-b603-be19b08638ce
-let # this is a block to not leak any variables to other parts of the notebook
-	# peps = initialize_peps(Float64, ComplexSpace(2), ComplexSpace(3))
-	# double_peps = merge_braket(peps)
-	# environments = initialize_random_environment(double_peps, ComplexSpace(10))
-	# environments = ctmrg(environments, double_peps)
 end
 
 # ╔═╡ df668aea-2156-40f4-8dbd-2a442e863210
@@ -880,18 +877,18 @@ md"""
 """
 
 # ╔═╡ 80907dcf-e9b6-47e8-89e9-f9e69a23ee63
-function merge_ketbra(ket::InfinitePEPS, bra::InfinitePEPS)
-	V_north = space(bra, 2) ⊗ space(ket, 2)'
+function merge_ketbra(peps::InfinitePEPS)
+	V_north = space(peps, 2) ⊗ space(peps, 2)'
 	fuse_north = isomorphism(fuse(V_north) ← V_north)
-	V_east = space(bra, 3) ⊗ space(ket, 3)'
+	V_east = space(peps, 3) ⊗ space(peps, 3)'
 	fuse_east = isomorphism(fuse(V_east) ← V_east)
-	@tensor braket[P P'; N E S W] := conj(bra[P'; n' e' s' w']) * ket[P; n e s w] *
+	@tensor braket[P P'; N E S W] := conj(peps[P'; n' e' s' w']) * peps[P; n e s w] *
 		fuse_north[N; n n'] * fuse_east[E; e e'] * conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
 end
 
 # ╔═╡ f6acc633-d9ab-4cf5-b475-f608d0df13b2
 function reduced_densitymatrix_1x1(peps, environment)
-	ρ_local = merge_ketbra(peps, peps)
+	ρ_local = merge_ketbra(peps)
 	return @tensor ρ[-1; -2] :=
 		environment.edge_west[11 3; 1] *
 		environment.corner_northwest[1; 2] *
@@ -1006,7 +1003,7 @@ md"""
 """
 
 # ╔═╡ f897eafd-d376-4ed9-811b-76290bf11280
-test_peps = initialize_peps(Float64, ComplexSpace(2), ComplexSpace(3))
+test_peps = rand(Float64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3) ⊗ ComplexSpace(3)' ⊗ ComplexSpace(3)')
 
 # ╔═╡ 14f49304-2286-48aa-b1b7-07a2e6f03cfe
 test_doublepeps = merge_braket(test_peps)
@@ -1015,9 +1012,9 @@ test_doublepeps = merge_braket(test_peps)
 test_environment = initialize_random_environment(test_doublepeps, ComplexSpace(4))
 
 # ╔═╡ b9ae7480-9341-4293-b615-d4b353ca39ed
-function ctmrg_expand_solution(environment, peps)
+function ctmrg_expand_solution(environment, peps::DoublePEPSTensor)
 	@tensor C_northwest[s; w1 w2] := environment.edge_west[s w2; n] * environment.corner_northwest[n; w1]
-	@tensor E_north[w1 w2 s; e1 e2] := environment.edge_north[w1 n; e1] * peps.tensor[w2 s; n e2]
+	@tensor E_north[w1 w2 s; e1 e2] := environment.edge_north[w1 n; e1] * peps[w2 s; n e2]
 	@tensor C_northeast[e1 e2; s] := environment.corner_northeast[e1; n] * environment.edge_east[n e2; s]
 	return C_northwest, E_north, C_northeast
 end
@@ -1044,14 +1041,14 @@ let
 end
 
 # ╔═╡ 71526bec-030b-476c-a264-db69f858aeb7
-function ctmrg_projectors_solution(environments, peps; maxdim::Int = 10)
+function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; maxdim::Int = 10)
 	@tensor L[-1 -2; -3 -4] :=
         environments.edge_south[-1 3; 1] *
 		environments.corner_southwest[1; 2] *
 		environments.edge_west[2 4; 5] *
-		peps.tensor[4 3; 6 -2] *
+		peps[4 3; 6 -2] *
 		environments.edge_west[5 7; 8] *
-		peps.tensor[7 6; 9 -4] *
+		peps[7 6; 9 -4] *
 		environments.corner_northwest[8; 10] *
 		environments.edge_north[10 9; -3]
 	
@@ -1059,9 +1056,9 @@ function ctmrg_projectors_solution(environments, peps; maxdim::Int = 10)
 		environments.edge_north[-1 3; 1] *
 		environments.corner_northeast[1; 2] *
 		environments.edge_east[2 4; 5] *
-		peps.tensor[-2 6; 3 4] *
+		peps[-2 6; 3 4] *
 		environments.edge_east[5 7; 8] *
-		peps.tensor[-4 9; 6 7] *
+		peps[-4 9; 6 7] *
 		environments.corner_southeast[8; 10] *
 		environments.edge_south[10 9; -3]
 
@@ -1091,6 +1088,171 @@ let
 			correct()
 		else
 			keep_working()
+		end
+	end
+end
+
+# ╔═╡ 99fad623-4b57-4aad-bc3a-66230fb81034
+function ctmrg_renormalize_solution(C_northwest, E_north, C_northeast, PR, PL)
+	C_northwest′ = C_northwest * PR
+	@tensor E_north′[-1 -2; -3] := PL[-1; 3 4] * E_north[3 4 -2; 1 2] * PR[1 2; -3]
+	C_northeast′ = PL * C_northeast
+	return normalize(C_northwest′), normalize(E_north′), normalize(C_northeast′)
+end
+
+# ╔═╡ 49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
+function ctmrg_north_iteration_solution(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
+	C_northwest, E_north, C_northeast = ctmrg_expand_solution(environment, peps)
+	PR, PL = ctmrg_projectors_solution(environment, peps; kwargs...)
+	C_northwest′, E_north′, C_northeast′ = ctmrg_renormalize_solution(
+		C_northwest, E_north, C_northeast, PR, PL
+	)
+	return CTMRGEnvironment(
+		E_north′, environment.edge_east, environment.edge_south, environment.edge_west,
+		C_northwest′, C_northeast′, environment.corner_southeast, environment.corner_southwest
+	)
+end
+
+# ╔═╡ ada2cab6-fc02-4b05-a7d5-edbbae746dde
+function rotate_clockwise_solution(peps::DoublePEPSTensor)
+	return @tensor peps′[S E; W N] := peps[W S; N E]
+end
+
+# ╔═╡ 48270af5-c36a-499d-b0c1-f688820e7b84
+function rotate_clockwise_solution(environment::CTMRGEnvironment)
+	return CTMRGEnvironment(
+		environment.edge_west, environment.edge_north, environment.edge_east, environment.edge_south,
+		environment.corner_southwest, environment.corner_northwest, environment.corner_northeast, environment.corner_southeast
+	)
+end
+
+# ╔═╡ b986149d-055a-4588-a08f-e2a86e803a38
+let
+	test_result = rotate_clockwise(test_doublepeps)
+	actual_result = rotate_clockwise_solution(test_doublepeps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		if (space(test_result) == space(actual_result)) && (test_result ≈ actual_result)
+			correct()
+		else
+			almost(md"The returned value is incorrect. Did you rotate clockwise, or forgot the bipartition?")
+		end
+	end
+end
+
+# ╔═╡ 2506dde2-acac-41c9-935e-023b87223a8f
+let
+	test_result = rotate_clockwise(test_doublepeps)
+	actual_result = rotate_clockwise_solution(test_doublepeps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		if (all(fieldnames(CTMRGEnvironment)) do f
+			t1 = getproperty(test_result, f)
+			t2 = getproperty(actual_result, f)
+			return (space(t1) == space(t2)) && (t1 ≈ t2)
+		end)
+			correct()
+		else
+			almost(md"The returned value is incorrect. Did you rotate clockwise, or forgot the bipartition?")
+		end
+	end
+end
+
+# ╔═╡ 3411519b-ac28-4983-b477-026c8d015b97
+function ctmrg_iteration_solution(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
+	for direction in 1:4
+		# one iteration in north direction
+		environment = ctmrg_north_iteration_solution(environment, peps; kwargs...)
+
+		# one rotation
+		environment = rotate_clockwise_solution(environment)
+		peps = rotate_clockwise_solution(peps)
+	end
+	return environment
+end
+
+# ╔═╡ 80afa573-0cc0-4c7e-98d6-f58bdf9205d9
+function singular_value_distance_solution(S1, S2)
+	S1_extended = vcat(S1, zeros(max(0, length(S2) - length(S1))))
+	S2_extended = vcat(S2, zeros(max(0, length(S1) - length(S2))))
+	return norm(S1_extended - S2_extended)
+end
+
+# ╔═╡ 0d6f69d6-7ed0-487a-852b-241d2580e1f3
+let
+	test_result = ctmrg_iteration(test_environment, test_doublepeps)
+	actual_result = ctmrg_iteration_solution(test_environment, test_doublepeps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		if !(all(fieldnames(CTMRGEnvironment)) do f 
+			getproperty(test_result, f) ≈ getproperty(actual_result, f)
+		end)
+			almost(md"The returned value is incorrect. Did you take the norm of the difference?")
+		else
+			test_result2 = singular_value_distance([0.9, 0.8], [0.4, 0.2, 0.1])
+			actual_result2 = singular_value_distance_solution([0.9, 0.8], [0.4, 0.2, 0.1])
+			if !(test_result2 ≈ actual_result2)
+				almost(md"The function does not properly handle inputs of different lengths")
+			else
+				correct()
+			end
+		end
+	end
+end
+
+# ╔═╡ 618d268f-869b-434b-a3d7-380d2f51ef25
+let
+	test_result = ctmrg_iteration(test_environment, test_doublepeps)
+	actual_result = ctmrg_iteration_solution(test_environment, test_doublepeps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		if !(all(fieldnames(CTMRGEnvironment)) do f 
+			getproperty(test_result, f) ≈ getproperty(actual_result, f)
+		end)
+			almost(md"The returned value is incorrect. Did you take the norm of the difference?")
+		else
+			test_result2 = singular_value_distance([0.9, 0.8], [0.4, 0.2, 0.1])
+			actual_result2 = singular_value_distance_solution([0.9, 0.8], [0.4, 0.2, 0.1])
+			if !(test_result2 ≈ actual_result2)
+				almost(md"The function does not properly handle inputs of different lengths")
+			else
+				correct()
+			end
+		end
+	end
+end
+
+# ╔═╡ 8afc3b09-84fe-4966-823d-464805edc66f
+let
+	test_result = singular_value_distance([0.9, 0.8], [0.4, 0.2])
+	actual_result = singular_value_distance_solution([0.9, 0.8], [0.4, 0.2])
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		if !(test_result ≈ actual_result)
+			almost(md"The returned value is incorrect. Did you take the norm of the difference?")
+		else
+			test_result2 = singular_value_distance([0.9, 0.8], [0.4, 0.2, 0.1])
+			actual_result2 = singular_value_distance_solution([0.9, 0.8], [0.4, 0.2, 0.1])
+			if !(test_result2 ≈ actual_result2)
+				almost(md"The function does not properly handle inputs of different lengths")
+			else
+				correct()
+			end
 		end
 	end
 end
@@ -2039,12 +2201,12 @@ version = "17.7.0+0"
 # ╠═faa5861e-bd36-4503-89bf-ed56a190250f
 # ╟─394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
 # ╠═f176dc62-b1f5-447c-958f-b08a6ff2efd7
-# ╠═df08983e-dab0-4a00-bf0c-4eb91f42f1fa
+# ╠═ea38966c-c34d-4e5a-ad74-5cdc5d9c8c77
+# ╟─df08983e-dab0-4a00-bf0c-4eb91f42f1fa
 # ╟─20f29190-2e0d-42e3-af82-11761478d29d
 # ╟─ab8cc3a0-0fd4-4f11-be1d-40b2a44f53d2
 # ╟─d2c17a80-1c4a-49be-b615-ed6eb53b0779
-# ╟─a3a87f5e-da1a-45f2-b45b-8df484a30de8
-# ╠═82fa0408-7690-41db-8ced-823aeb662974
+# ╠═a3a87f5e-da1a-45f2-b45b-8df484a30de8
 # ╟─9da0bb7d-f918-40a1-871f-a546d7b5f641
 # ╟─c0862aa4-715b-412a-97ec-5bdf00a5fbdf
 # ╟─f2a65413-604c-45f4-99cc-e4f9abc914be
@@ -2055,36 +2217,38 @@ version = "17.7.0+0"
 # ╟─7a94202f-3487-47c7-923a-61a178257374
 # ╟─1f0ba404-8001-4bc3-9132-1ce4a3a2e78d
 # ╟─b1c0ca10-e70a-42f9-bb49-ecba7a4c0c4e
-# ╟─4bb53195-71b9-42d9-b801-c5bf4a674c14
+# ╠═4bb53195-71b9-42d9-b801-c5bf4a674c14
 # ╟─ec6e77bb-0fc5-4730-85af-c37d15b2aeed
-# ╟─ff1bbb0b-6ff8-4835-a28f-f6b9ef221faa
-# ╟─020b5d5f-cd1b-40a8-ae0e-4b8e3d15e594
-# ╠═ea38966c-c34d-4e5a-ad74-5cdc5d9c8c77
+# ╠═ff1bbb0b-6ff8-4835-a28f-f6b9ef221faa
 # ╟─3983afb7-585b-4e43-aab1-de4ce47d685a
 # ╠═effb78fe-894f-4b44-95ea-f3d80134bc75
 # ╟─d6a71ccd-5bee-4532-bf29-03348ac7bb8e
 # ╟─f5dd768c-97b4-48cc-be0c-ed36ffad371d
 # ╠═607be339-8a6a-4a18-bbde-7775a349bbc1
 # ╟─941cfb90-087e-48ea-93df-8e72aaaaff8b
-# ╟─1c6868d8-49aa-41a5-ac63-a09fa5e60fc4
+# ╠═1c6868d8-49aa-41a5-ac63-a09fa5e60fc4
 # ╠═0689c458-4352-4800-a7e2-29b9adfce426
 # ╟─0ba5f43a-509f-49e5-ae4d-7d4c995a60fc
-# ╠═a5c48034-af8a-402f-bbf7-47c5d9aed52e
+# ╠═d7579195-063f-49a5-95b8-8e88dc823321
 # ╟─c410317c-9fd6-4c05-8053-544f24534a0f
 # ╠═e4bda769-1aaf-4bcc-a2ca-600adb988639
-# ╟─f95272cc-1b29-479f-a1ec-3128bf393204
+# ╟─b986149d-055a-4588-a08f-e2a86e803a38
+# ╠═f95272cc-1b29-479f-a1ec-3128bf393204
+# ╟─2506dde2-acac-41c9-935e-023b87223a8f
+# ╠═0d6f69d6-7ed0-487a-852b-241d2580e1f3
+# ╟─05e524c3-0369-4bea-8aea-eec522953d5f
 # ╠═f7bd71f9-f785-452a-a606-84d0f823f09d
-# ╠═3d4a07e4-f5c1-42d7-bc4d-a15a2fb36b66
-# ╠═8c32a473-4f08-4955-bdea-25cef4490de0
+# ╠═618d268f-869b-434b-a3d7-380d2f51ef25
+# ╟─3d4a07e4-f5c1-42d7-bc4d-a15a2fb36b66
 # ╠═2481bcb0-3c48-4d3e-97d4-5f00efd8ef2f
-# ╟─3b69e064-185b-4c56-8e75-b062059f3f08
-# ╠═31384227-6e84-4bf7-b603-be19b08638ce
+# ╠═8c32a473-4f08-4955-bdea-25cef4490de0
+# ╟─8afc3b09-84fe-4966-823d-464805edc66f
 # ╟─df668aea-2156-40f4-8dbd-2a442e863210
 # ╟─67503430-d5d1-4ee6-847f-4b7dbecdf7ed
-# ╠═80907dcf-e9b6-47e8-89e9-f9e69a23ee63
-# ╠═f6acc633-d9ab-4cf5-b475-f608d0df13b2
-# ╠═d007a99a-fb6a-4b76-9edc-949fa2787b8d
-# ╠═d97aae83-b513-4332-bc01-17fdd38b1381
+# ╟─80907dcf-e9b6-47e8-89e9-f9e69a23ee63
+# ╟─f6acc633-d9ab-4cf5-b475-f608d0df13b2
+# ╟─d007a99a-fb6a-4b76-9edc-949fa2787b8d
+# ╟─d97aae83-b513-4332-bc01-17fdd38b1381
 # ╠═f657e893-c238-419a-941a-f0ed9374e838
 # ╠═1c8c0edc-4ea6-470a-8b6c-ad4e9e2cb230
 # ╠═085669a2-0c44-4df2-93ce-475be4e45579
@@ -2101,5 +2265,11 @@ version = "17.7.0+0"
 # ╠═f560e045-433f-4562-a611-119ce410342f
 # ╠═b9ae7480-9341-4293-b615-d4b353ca39ed
 # ╠═71526bec-030b-476c-a264-db69f858aeb7
+# ╠═99fad623-4b57-4aad-bc3a-66230fb81034
+# ╠═49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
+# ╠═ada2cab6-fc02-4b05-a7d5-edbbae746dde
+# ╠═48270af5-c36a-499d-b0c1-f688820e7b84
+# ╠═3411519b-ac28-4983-b477-026c8d015b97
+# ╠═80afa573-0cc0-4c7e-98d6-f58bdf9205d9
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
