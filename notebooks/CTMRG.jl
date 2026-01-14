@@ -643,27 +643,6 @@ The spaces and scalar type should be chosen to be compatible with the `double_pe
 """
 function initialize_random_environment(double_peps::DoublePEPSTensor, boundary_virtualspace)
 	return missing
-	T = scalartype(double_peps)
-	
-	north_virtualspace = space(double_peps, 3)'
-	east_virtualspace = space(double_peps, 4)'
-	south_virtualspace = space(double_peps, 2)'
-	west_virtualspace = space(double_peps, 1)'
-	
-	edge_north = randn(T, boundary_virtualspace ⊗ north_virtualspace ← boundary_virtualspace)
-	edge_east = randn(T, boundary_virtualspace ⊗ east_virtualspace ← boundary_virtualspace)
-	edge_south = randn(T, boundary_virtualspace ⊗ south_virtualspace ← boundary_virtualspace)
-	edge_west = randn(T, boundary_virtualspace ⊗ west_virtualspace ← boundary_virtualspace)
-
-	corner_northeast = randn(T, boundary_virtualspace ← boundary_virtualspace)
-	corner_northwest = randn(T, boundary_virtualspace ← boundary_virtualspace)
-	corner_southeast = randn(T, boundary_virtualspace ← boundary_virtualspace)
-	corner_southwest = randn(T, boundary_virtualspace ← boundary_virtualspace)
-
-	return CTMRGEnvironment(
-		edge_north, edge_east, edge_south, edge_west,
-		corner_northwest, corner_northeast, corner_southeast, corner_southwest
-	)
 end
 
 # ╔═╡ 3983afb7-585b-4e43-aab1-de4ce47d685a
@@ -716,15 +695,19 @@ $(PlutoUI.LocalResource("./assets/projection.jpeg"))
 
 # ╔═╡ 607be339-8a6a-4a18-bbde-7775a349bbc1
 """
-	ctmrg_projectors(environments::CTMRGEnvironments, peps::DoublePEPSTensor; maxdim::Integer = 10) -> PR, PL
+	ctmrg_projectors(environments::CTMRGEnvironments, peps::DoublePEPSTensor; trunc = trunc_default) -> PR, PL
 
 Compute the appropriate CTMRG projectors of a given maximal dimension by first contracting the left- and right half `L` and `R` of a 4x4 grid, and then performing a truncated singular value decomposition on the result.
+
 It can be convenient to choose the bipartition and indexorder of `L` and `R` such that no additional tensor contractions are required, and only matrix multiplications are involved.
+
+Note that for stability, you should normalize `M = L * R` as `M / norm(M)` before truncating.
+
 The shape of the output tensors should be:
 - `PR`: ``V_χ ⊗ V_D ← V_χ′``
 - `PL`: ``V_χ′ ← V_χ ⊗ V_D``
 """
-function ctmrg_projectors(environments, peps; maxdim::Integer = 10)
+function ctmrg_projectors(environments, peps; trunc = trunc_default)
 	missing
 end
 
@@ -740,11 +723,14 @@ $(PlutoUI.LocalResource("./assets/renormalization.jpeg"))
 """
 
 # ╔═╡ 0689c458-4352-4800-a7e2-29b9adfce426
+"""
+	ctmrg_renormalize(C_northwest, E_north, C_northeast, PR, PL) -> C_northwest′, E_north′, C_northeast′
+
+Use the provided projectors to renormalized the expanded corners and edge.
+The output tensors should have the same shape as the initial corner and edge tensors.
+"""
 function ctmrg_renormalize(C_northwest, E_north, C_northeast, PR, PL)
-	C_northwest′ = C_northwest * PR
-	@tensor E_north′[-1 -2; -3] := PL[-1; 3 4] * E_north[3 4 -2; 1 2] * PR[1 2; -3]
-	C_northeast′ = PL * C_northeast
-	return normalize(C_northwest′), normalize(E_north′), normalize(C_northeast′)
+	return missing
 end
 
 # ╔═╡ 0ba5f43a-509f-49e5-ae4d-7d4c995a60fc
@@ -779,11 +765,23 @@ However, this would be quite tedious, and instead we can simply rotate the envir
 """
 
 # ╔═╡ e4bda769-1aaf-4bcc-a2ca-600adb988639
+"""
+	rotate_clockwiste(peps::DoublePEPSTensor) -> rotated_peps::DoublePEPSTensor
+
+Rotate the double-layer peps tensor clockwise.
+This can be achieved with an index permutation, see also the relevant (I. TensorKit) section.
+"""
 function rotate_clockwise(peps::DoublePEPSTensor)
 	missing
 end
 
 # ╔═╡ f95272cc-1b29-479f-a1ec-3128bf393204
+"""
+	rotate_clockwise(environment::CTMRGEnvironment) -> rotated_environment::CTMRGEnvironment
+
+Rotate the environment clockwise.
+Note that this can be achieved solely by reinterpreting tensors, and does not require any permutations.
+"""
 function rotate_clockwise(environment::CTMRGEnvironment)
 	missing
 end
@@ -960,35 +958,20 @@ We now have all of the components to compute the energy for the [Transverse-fiel
 H = -J \left(\sum_{\langle i, j} Z_i ⊗ Z_j + g \sum_i X_i \right)
 ```
 
-In particular, we find three non-equivalent terms that we have to compute, the onsite term containing `X_i`, as well as the horizontal and vertical twosite terms containing `Z_i ⊗ Z_j`
+In particular, we find three non-equivalent terms that we have to compute, the onsite term containing `X_i`, as well as the horizontal and vertical twosite terms containing `Z_i ⊗ Z_j`.
 """
 
-# ╔═╡ 9d31d315-3997-4453-98ef-bc4fedd45105
-function onsite_energy(peps, environment; J = 1.0, g = 1.0)
-	ρ = reduced_densitymatrix_1x1(peps, environment)
-	return -(J * g) * tr(X * ρ) / tr(ρ)
-end
-
-# ╔═╡ 80457440-8a86-4842-b5af-20af852a0236
-function horizontal_energy(peps, environment)
-	ZZ = Z ⊗ Z
-	ρ = reduced_densitymatrix_1x2(peps, environment)
-	return tr(ZZ * ρ) / tr(ρ)
-end
-
-# ╔═╡ 49dd1b84-8130-4c52-94e0-831efca34ccb
-function vertical_energy(peps, environment)
-	ZZ = Z ⊗ Z
-	ρ = reduced_densitymatrix_2x1(peps, environment)
-	return tr(ZZ * ρ) / tr(ρ)
-end
+# ╔═╡ ffcabfcf-0ef9-45f6-ab97-c42a38659167
+hint(md"Keep in mind that when we are summing up these different contributions, the onsite terms are counted only once, while the twosite terms are counted twice!")
 
 # ╔═╡ f14e8ba9-d692-46da-be7b-3ac79af5d744
+"""
+	ising_energy(peps::PEPSTensor, environment::CTMRGEnvironment; J = 1.0, g = 1.0) -> E::Number
+
+Compute the energy of the transverse-field Ising model by correctly combining the horizontal, vertical and onsite contributions.
+"""
 function ising_energy(peps, environment; J = 1.0, g = 1.0)
-	E_onsite = onsite_energy(peps, environment)
-	E_horizontal = horizontal_energy(peps, environment)
-	E_vertical = vertical_energy(peps, environment)
-	return -J * ((E_horizontal + E_vertical) / 2 + g * E_onsite) 
+	return missing 
 end
 
 # ╔═╡ 06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
@@ -996,9 +979,19 @@ md"""
 # IV. Optimization
 
 The final piece of the puzzle simply puts all pieces of the puzzle together.
-We can use any black-box optimization routine we like, and here we will opt to use OptimKit.jl's LBFGS.
-For this to work, on the one hand we need to define our optimization landscape by specifying an inner product and a retraction (how to take a step on the manifold), while on the other we need to tell which we want to go by providing a cost function and a gradient.
+In principle, we can use any black-box optimization routine we like, and here we will opt to write our own incredibly naive [Gradient descent](https://en.wikipedia.org/wiki/Gradient_descent) implementation.
+For this to work, we only need to define a loss function (the energy), and the gradient.
+
+For the loss function, we already have all of the components that we need to start from a single PEPS tensor, and end up with the energy computed from the Ising model Hamiltonian.
+We just need to put the pieces together as follows:
+
 """
+
+# ╔═╡ 48466ad6-0daa-4ffa-bcf5-efa1578da7ee
+hint(md"To define a valid loss function, we must ensure the result is real!")
+
+# ╔═╡ c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
+
 
 # ╔═╡ cb153168-3a38-42b1-a2e5-4b5cd1062e49
 md"""
@@ -1010,8 +1003,7 @@ Since we plan on making use of automatic differentiation to provide
 md"""
 ## Gradient and Loss Function
 
-For the loss function, we already have all of the components that we need to start from a single PEPS tensor, and end up with the energy computed from the Ising model Hamiltonian.
-We just need to put the pieces together as follows:
+
 """
 
 # ╔═╡ 2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
@@ -1019,7 +1011,7 @@ md"""
 Then, we will use automatic differentiation to obtain the gradient.
 For this, we will use Zygote.jl and reverse-mode automatic differentiation as a black-box way to obtain the gradient.
 Since we are using a naive approach, we will simply show that we can slightly lower the energy by following the path of the gradient.
-To this end, we implement the most naive [gradient descent](https://en.wikipedia.org/wiki/Gradient_descent) algorithm as follows:
+To this end, we implement the most naive [gradient descent]() algorithm as follows:
 """
 
 # ╔═╡ a6a226c4-f212-4dce-8ec2-56242028bb96
@@ -1131,60 +1123,36 @@ function initialize_random_environment_solution(double_peps::DoublePEPSTensor, b
 	)
 end
 
-# ╔═╡ f560e045-433f-4562-a611-119ce410342f
-test_environment = initialize_random_environment_solution(test_doublepeps, ComplexSpace(4))
-
-# ╔═╡ 71526bec-030b-476c-a264-db69f858aeb7
-function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; maxdim::Int = 10)
-	@tensor L[-1 -2; -3 -4] :=
-        environments.edge_south[-1 3; 1] *
-		environments.corner_southwest[1; 2] *
-		environments.edge_west[2 4; 5] *
-		peps[4 3; 6 -2] *
-		environments.edge_west[5 7; 8] *
-		peps[7 6; 9 -4] *
-		environments.corner_northwest[8; 10] *
-		environments.edge_north[10 9; -3]
-	
-	@tensor R[-1 -2; -3 -4] :=
-		environments.edge_north[-1 3; 1] *
-		environments.corner_northeast[1; 2] *
-		environments.edge_east[2 4; 5] *
-		peps[-2 6; 3 4] *
-		environments.edge_east[5 7; 8] *
-		peps[-4 9; 6 7] *
-		environments.corner_southeast[8; 10] *
-		environments.edge_south[10 9; -3]
-
-	M = L * R
-	U, Σ, Vᴴ = svd_trunc(M / norm(M); trunc = truncrank(maxdim) & trunctol(; atol = 1e-8))
-	Σ_invsqrt = inv(sqrt(Σ))
-	PR = R * Vᴴ' * Σ_invsqrt
-	PL = Σ_invsqrt * U' * L
-
-	return PR, PL
-end
-
-# ╔═╡ 941cfb90-087e-48ea-93df-8e72aaaaff8b
+# ╔═╡ 64578a89-a80b-41c3-9112-188260fa0f38
 let
-	test_result = ctmrg_projectors(test_environment, test_doublepeps; maxdim = 10)
-	actual_result = ctmrg_projectors_solution(test_environment, test_doublepeps; maxdim = 10)
+	test_result = initialize_random_environment(test_doublepeps, ℂ^4)
+	actual_result = initialize_random_environment_solution(test_doublepeps, ℂ^4)
+	
 	if ismissing(test_result)
 		still_missing()
 	elseif typeof(test_result) !== typeof(actual_result)
-		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+		keep_working(md"The type of the output is not correct. Did you return the required outputs? Did you obtain the correct scalar type?")
 	else
-		PR, PL = test_result
-		PR′, PL′ = actual_result
-		if (space(PR) != space(PR′)) || (space(PL) != space(PL′))
-			almost(md"The spaces of (one of) the output tensors are not correct. Make sure to put the indices in the correct order and take the proper truncation dimension in mind.")
-		elseif (PR ≈ PR′) && (PL ≈ PL′)
+		spaces_equal = all(fieldnames(CTMRGEnvironment)) do f
+			t1 = get(test_result, f)
+			t2 = get(actual_result, f)
+			return space(t1) == space(t2)
+		end
+		if spaces_equal
 			correct()
 		else
-			keep_working()
+		almost(md"The spaces of the output are not correct. Did you make sure the north and south, and east and west virtual spaces match?")
 		end
 	end
 end
+
+# ╔═╡ f560e045-433f-4562-a611-119ce410342f
+test_environment = initialize_random_environment_solution(test_doublepeps, ComplexSpace(4))
+
+# ╔═╡ 62df3042-5244-4c31-9e5c-aefe893221e5
+md"""
+### Expansion solutions
+"""
 
 # ╔═╡ b9ae7480-9341-4293-b615-d4b353ca39ed
 function ctmrg_expand_solution(environment, peps::DoublePEPSTensor)
@@ -1215,6 +1183,68 @@ let
 	end
 end
 
+# ╔═╡ fede9fd2-071e-4f2d-b346-c418450df0d3
+md"""
+### Projection solutions
+"""
+
+# ╔═╡ 71526bec-030b-476c-a264-db69f858aeb7
+function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; trunc = trunc_default)
+	@tensor L[-1 -2; -3 -4] :=
+        environments.edge_south[-1 3; 1] *
+		environments.corner_southwest[1; 2] *
+		environments.edge_west[2 4; 5] *
+		peps[4 3; 6 -2] *
+		environments.edge_west[5 7; 8] *
+		peps[7 6; 9 -4] *
+		environments.corner_northwest[8; 10] *
+		environments.edge_north[10 9; -3]
+	
+	@tensor R[-1 -2; -3 -4] :=
+		environments.edge_north[-1 3; 1] *
+		environments.corner_northeast[1; 2] *
+		environments.edge_east[2 4; 5] *
+		peps[-2 6; 3 4] *
+		environments.edge_east[5 7; 8] *
+		peps[-4 9; 6 7] *
+		environments.corner_southeast[8; 10] *
+		environments.edge_south[10 9; -3]
+
+	M = L * R
+	U, Σ, Vᴴ = svd_trunc(M / norm(M); trunc)
+	Σ_invsqrt = inv(sqrt(Σ))
+	PR = R * Vᴴ' * Σ_invsqrt
+	PL = Σ_invsqrt * U' * L
+
+	return PR, PL
+end
+
+# ╔═╡ 941cfb90-087e-48ea-93df-8e72aaaaff8b
+let
+	test_result = ctmrg_projectors(test_environment, test_doublepeps)
+	actual_result = ctmrg_projectors_solution(test_environment, test_doublepeps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		PR, PL = test_result
+		PR′, PL′ = actual_result
+		if (space(PR) != space(PR′)) || (space(PL) != space(PL′))
+			almost(md"The spaces of (one of) the output tensors are not correct. Make sure to put the indices in the correct order and take the proper truncation dimension in mind.")
+		elseif (PR ≈ PR′) && (PL ≈ PL′)
+			correct()
+		else
+			keep_working()
+		end
+	end
+end
+
+# ╔═╡ 8c8dcc41-a312-4231-87e7-c17208619e80
+md"""
+### Renormalization solutions
+"""
+
 # ╔═╡ 99fad623-4b57-4aad-bc3a-66230fb81034
 function ctmrg_renormalize_solution(C_northwest, E_north, C_northeast, PR, PL)
 	C_northwest′ = C_northwest * PR
@@ -1222,6 +1252,45 @@ function ctmrg_renormalize_solution(C_northwest, E_north, C_northeast, PR, PL)
 	C_northeast′ = PL * C_northeast
 	return C_northwest′ / norm(C_northwest′), E_north′ / norm(E_north′), C_northeast′ / norm(C_northeast′)
 end
+
+# ╔═╡ e26b6b31-aa56-4908-9e0a-47eefefcb55a
+let
+	C1, E, C2 = ctmrg_expand_solution(test_environment, test_doublepeps)
+	PR, PL = ctmrg_projectors_solution(test_environment, test_doublepeps)
+	
+	test_result = ctmrg_renormalize(C1, E, C2, PR, PL)
+	actual_result = ctmrg_renormalize_solution(C1, E, C2, PR, PL)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		all_spaces = all(zip(test_result, actual_result)) do (x, y)
+			return space(x) == space(y)
+		end
+		if !all_spaces
+			almost(
+				md"The spaces of (one of) the output tensors are not correct. Make sure to put the indices in the correct order and take the proper truncation dimension in mind."
+			)
+		else
+			all_tensors = all(zip(test_result, actual_result)) do (x, y)
+				return x ≈ y
+			end
+			if !all_tensors
+				almost(
+				md"The values of (one of) the output tensors are not correct."
+				)
+			else
+				correct()
+			end
+		end
+	end
+end
+
+# ╔═╡ e9fb5526-d68c-4b5d-ab7f-f7504d9405de
+md"""
+### Rotation solutions
+"""
 
 # ╔═╡ 49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
 function ctmrg_north_iteration_solution(environment::CTMRGEnvironment, peps::DoublePEPSTensor; kwargs...)
@@ -1264,27 +1333,6 @@ let
 		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
 	else
 		if (space(test_result) == space(actual_result)) && (test_result ≈ actual_result)
-			correct()
-		else
-			almost(md"The returned value is incorrect. Did you rotate clockwise, or forgot the bipartition?")
-		end
-	end
-end
-
-# ╔═╡ 2506dde2-acac-41c9-935e-023b87223a8f
-let
-	test_result = rotate_clockwise(test_doublepeps)
-	actual_result = rotate_clockwise_solution(test_doublepeps)
-	if ismissing(test_result)
-		still_missing()
-	elseif typeof(test_result) !== typeof(actual_result)
-		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
-	else
-		if (all(fieldnames(CTMRGEnvironment)) do f
-			t1 = getproperty(test_result, f)
-			t2 = getproperty(actual_result, f)
-			return (space(t1) == space(t2)) && (t1 ≈ t2)
-		end)
 			correct()
 		else
 			almost(md"The returned value is incorrect. Did you rotate clockwise, or forgot the bipartition?")
@@ -1412,10 +1460,17 @@ end
 
 # ╔═╡ 55e6c29b-2e62-4b86-8d76-ca94900878f0
 """
+	loss_function(peps::PEPSTensor; trunc = default_trunc, maxiter = 100, J = 1.0, g = 0.5) -> energy::Real
 
+Compute the (real) loss function for the given PEPS tensor.
+This can be achieved by following this procedure:
 
+1. Merge the PEPS tensor into a double layer (`merge_braket`)
+2. Initialize a CTMRG environment for the given PEPS (`initialize_random_environment`)
+3. Converge this environment using the CTMRG algorithm. (`ctmrg`)
+4. Compute the energy by combining the local terms. (`ising_energy`)
 """
-function loss_function(peps::PEPSTensor; maxdim = 10, J = 1.0, g = 0.5)
+function loss_function(peps::PEPSTensor; trunc = default_trunc, maxiter = 100, J = 1.0, g = 0.5)
 	double_peps = merge_braket(peps)
 	environments = initialize_random_environment(double_peps, ℂ^maxdim)
 	environments = ctmrg_solution(environments, double_peps)
@@ -1488,6 +1543,23 @@ function ising_energy_solution(peps, environment; J = 1.0, g = 1.0)
 	E_onsite = -(J * g) * tr(X * ρ) / tr(ρ)
 	
 	return E_horizontal + E_vertical + E_onsite
+end
+
+# ╔═╡ 6af48706-5bfe-4aac-bf31-a8f7e69006c3
+let
+	test_result = ising_energy(test_peps, test_environment)
+	actual_result = ising_energy_solution(test_peps, test_environment)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	else
+		if !(test_result ≈ actual_result)
+			almost(md"The returned value is incorrect. Did you correctly count all contributions?")
+		else
+			correct()
+		end
+	end
 end
 
 # ╔═╡ a4e00e0a-af1b-4a3f-997f-381bcbf9932d
@@ -2446,6 +2518,7 @@ version = "17.4.0+2"
 # ╟─079ab68e-859f-4218-9302-fa868d4324f5
 # ╟─ec6e77bb-0fc5-4730-85af-c37d15b2aeed
 # ╠═ff1bbb0b-6ff8-4835-a28f-f6b9ef221faa
+# ╟─64578a89-a80b-41c3-9112-188260fa0f38
 # ╟─3983afb7-585b-4e43-aab1-de4ce47d685a
 # ╠═effb78fe-894f-4b44-95ea-f3d80134bc75
 # ╟─d6a71ccd-5bee-4532-bf29-03348ac7bb8e
@@ -2454,14 +2527,14 @@ version = "17.4.0+2"
 # ╟─941cfb90-087e-48ea-93df-8e72aaaaff8b
 # ╠═1c6868d8-49aa-41a5-ac63-a09fa5e60fc4
 # ╠═0689c458-4352-4800-a7e2-29b9adfce426
+# ╟─e26b6b31-aa56-4908-9e0a-47eefefcb55a
 # ╟─0ba5f43a-509f-49e5-ae4d-7d4c995a60fc
 # ╠═d7579195-063f-49a5-95b8-8e88dc823321
 # ╟─c410317c-9fd6-4c05-8053-544f24534a0f
 # ╠═e4bda769-1aaf-4bcc-a2ca-600adb988639
 # ╟─b986149d-055a-4588-a08f-e2a86e803a38
 # ╠═f95272cc-1b29-479f-a1ec-3128bf393204
-# ╟─2506dde2-acac-41c9-935e-023b87223a8f
-# ╠═0d6f69d6-7ed0-487a-852b-241d2580e1f3
+# ╟─0d6f69d6-7ed0-487a-852b-241d2580e1f3
 # ╟─05e524c3-0369-4bea-8aea-eec522953d5f
 # ╠═f7bd71f9-f785-452a-a606-84d0f823f09d
 # ╠═618d268f-869b-434b-a3d7-380d2f51ef25
@@ -2477,16 +2550,17 @@ version = "17.4.0+2"
 # ╠═d007a99a-fb6a-4b76-9edc-949fa2787b8d
 # ╠═4a65aa03-c385-4bfb-944c-911606a0e2ff
 # ╠═d97aae83-b513-4332-bc01-17fdd38b1381
-# ╠═001563e4-125c-46ba-97c0-c95b8bf25fec
-# ╠═9d31d315-3997-4453-98ef-bc4fedd45105
-# ╠═80457440-8a86-4842-b5af-20af852a0236
-# ╠═49dd1b84-8130-4c52-94e0-831efca34ccb
+# ╟─001563e4-125c-46ba-97c0-c95b8bf25fec
+# ╟─ffcabfcf-0ef9-45f6-ab97-c42a38659167
 # ╠═f14e8ba9-d692-46da-be7b-3ac79af5d744
-# ╟─06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
+# ╟─6af48706-5bfe-4aac-bf31-a8f7e69006c3
+# ╠═06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
+# ╟─48466ad6-0daa-4ffa-bcf5-efa1578da7ee
+# ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
+# ╠═c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
 # ╠═cb153168-3a38-42b1-a2e5-4b5cd1062e49
 # ╠═7eb8edae-9d1b-4311-af50-6a258840f8eb
 # ╠═e58ed93c-4b37-44c4-8269-bb8cb039b4fa
-# ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
 # ╠═2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
 # ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
@@ -2502,11 +2576,15 @@ version = "17.4.0+2"
 # ╟─aa0c308c-7b1e-4680-9193-c186c3bc2dd3
 # ╠═e0f67905-a3bd-490d-b96a-c5edfc8e4aca
 # ╠═1168c7df-9817-4aca-9173-03c9b6ef7d01
-# ╟─6adac67a-3382-4ccd-bddd-6f7882a722ea
+# ╟─62df3042-5244-4c31-9e5c-aefe893221e5
+# ╠═b9ae7480-9341-4293-b615-d4b353ca39ed
+# ╟─fede9fd2-071e-4f2d-b346-c418450df0d3
 # ╠═71526bec-030b-476c-a264-db69f858aeb7
-# ╟─b9ae7480-9341-4293-b615-d4b353ca39ed
-# ╟─99fad623-4b57-4aad-bc3a-66230fb81034
+# ╟─8c8dcc41-a312-4231-87e7-c17208619e80
+# ╠═99fad623-4b57-4aad-bc3a-66230fb81034
+# ╟─e9fb5526-d68c-4b5d-ab7f-f7504d9405de
 # ╟─49d2008e-8030-4c5f-8f98-cb2c42fd5d7d
+# ╠═6adac67a-3382-4ccd-bddd-6f7882a722ea
 # ╟─ada2cab6-fc02-4b05-a7d5-edbbae746dde
 # ╟─48270af5-c36a-499d-b0c1-f688820e7b84
 # ╟─21137319-da99-42df-ade3-7e3d808f9bc3
