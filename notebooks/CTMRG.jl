@@ -216,10 +216,10 @@ Here we import the spin operators in order to later define the Hamiltonian of th
 """
 
 # ╔═╡ 7777f7a1-76b8-4331-bceb-0a4c345f0710
-const X = SpinOperators.S_x()
+const X = SpinOperators.S_x(Float64)
 
 # ╔═╡ 5fd30785-d1b1-47fb-8476-d89a4262046b
-const Z = SpinOperators.S_z()
+const Z = SpinOperators.S_z(Float64)
 
 # ╔═╡ d73e61f1-622e-49b2-97bb-dec56807d117
 md"""
@@ -413,15 +413,21 @@ For the purpose of this notebook, the main factorization that is required is the
 While typically defined for matrices, we can trivially extend this definition for `TensorMap`s by using their interpretation as linear map from the domain to the codomain spaces.
 This factorization is particularly useful since it additionally allows optimal low-rank approximations of the input by discarding the smallest singular values.
 
-In MatrixAlgebraKit, this is accessible through the following:
+In MatrixAlgebraKit, this is accessible through `svd_trunc(t; trunc = ...)`:
 
 `maxdim = ` $(@bind maxdim Slider(1:100; default=25, show_value=true))
+
+Note that often it is a good idea to additionally truncate *small* values.
+This can be achieved by combining truncation stragies:
 """
+
+# ╔═╡ 24028f25-c076-431d-87e1-740906412b15
+trunc_default = truncrank(maxdim) & trunctol(; atol = 1e-10);
 
 # ╔═╡ faa5861e-bd36-4503-89bf-ed56a190250f
 let
 	A = rand(ℂ^100, ℂ^100)
-	U, S, Vᴴ = svd_trunc(A; trunc = truncrank(maxdim))
+	U, S, Vᴴ = svd_trunc(A; trunc = trunc_default)
 	space(U), space(S), space(Vᴴ)
 end
 
@@ -534,7 +540,7 @@ As a result, we can define the CTMRG environment tensors immediately for this do
 
 # ╔═╡ c0862aa4-715b-412a-97ec-5bdf00a5fbdf
 """
-    const EdgeTensor{T, S}
+    const EdgeTensor{T, S} = AbstractTensorMap{T, S, 2, 1}
 
 Default type for double-layer CTMRG edge environment tensors of element type `T` and space type `S`, with indices conventionally ordered as: ``V_l ⊗ P ← V_r``.
 Here, ``V_l`` and ``V_r`` denote the left and right virtual environment spaces and ``P`` denotes the PEPS virtual space.
@@ -550,7 +556,7 @@ const EdgeTensor{T, S} = AbstractTensorMap{T, S, 2, 1}
 
 # ╔═╡ f2a65413-604c-45f4-99cc-e4f9abc914be
 """
-    const CornerTensor{T, S}
+    const CornerTensor{T, S} = AbstractTensorMap{T, S, 1, 1}
 
 Default type for double-layer CTMRG corner environment tensors of element type `T` and space type `S`, with indices conventionally ordered as: ``V_l ← V_r``.
 Here, ``V_l`` and ``V_r`` denote the left and right virtual environment spaces.
@@ -565,26 +571,6 @@ const CornerTensor{T, S} = AbstractTensorMap{T, S, 1, 1}
 md"""
 Using this, we can set up the datastructures that we will use as follows:
 """
-
-# ╔═╡ 5d501f80-2e05-48ed-b62e-52ed723a2e90
-"""
-	InfinitePEPS{A <: PEPSTensor}
-
-Struct to represent an infinite PEPS built from a uniform grid of a single `PEPSTensor` repeated indefinitely.
-"""
-struct InfinitePEPS{A <: PEPSTensor}
-    tensor::A
-end
-
-# ╔═╡ 076f533f-1e61-4172-b118-d0815e8c66cd
-"""
-	InfiniteDoublePEPS{A <: DoublePEPSTensor}
-
-Struct to represent the combined double layer infinite PEPS built from a uniform grid of a single `DoublePEPSTensor` repeated indefinitely.
-"""
-struct InfiniteDoublePEPS{A <: DoublePEPSTensor}
-    tensor::A
-end
 
 # ╔═╡ b2b002e3-5c08-4cc6-89c3-07870bf666d7
 """
@@ -610,6 +596,11 @@ Throughout this tutorial, we will often use $d$ to refer to the dimension of the
 """
 
 # ╔═╡ 1f0ba404-8001-4bc3-9132-1ce4a3a2e78d
+"""
+	maximal_chi(environment::CTMRGEnvironmet) -> χ
+
+Compute the maximal value of the dimension of the environment virtual spaces.
+"""
 function maximal_chi(environment::CTMRGEnvironment)
 	return maximum(x -> dim(space(x, 1)), (environment.corner_northwest, environment.corner_northeast, environment.corner_southeast, environment.corner_southwest))
 end
@@ -618,36 +609,40 @@ end
 md"""
 ## Initialization
 
-In the initialization phase, we want to start from a given `InfinitePEPS` and set up the appropriate tensors to begin the CTMRG algorithm.
-For convenience, we also add a function to initialize a random `InfinitePEPS`.
+In the initialization phase, we want to start from a given `PEPSTensor` and set up the appropriate tensors to begin the CTMRG algorithm.
+For convenience, we also add a function to initialize a random `PEPSTensor`.
 """
 
 # ╔═╡ 4bb53195-71b9-42d9-b801-c5bf4a674c14
 """
-	initialize_peps(T, physicalspace, north_virtualspace, east_virtualspace = north_virtualspace)::InfinitePEPS
+	initialize_peps(T, physicalspace, north_virtualspace, east_virtualspace = north_virtualspace) -> peps::PEPSTensor
 
-Initialize a pseudo-random infinite PEPS state for a given element type `T <: Type{<:Number}`, `physicalspace`, `north_virtualspace` and `east_virtualspace`.
+Initialize a pseudo-random infinite PEPS state for a given element type `T <: Type{<:Number}`, with spaces defined by `physicalspace`, `north_virtualspace` and `east_virtualspace`.
+The output should have the following shape:
+- `peps`: ``P ← N ⊗ E ⊗ S ⊗ W``
+
+For the purpose of this tutorial, it does not matter what to initialize the tensors with, and you can use either `rand` or `randn`.
+The main thing to watch out for is to make sure the resulting tensor can be tiled to fill up the 2D infinite network, i.e. the north and south virtual spaces must match, as do the east and west virtual spaces.
 """
 function initialize_peps(T, physicalspace, north_virtualspace, east_virtualspace = north_virtualspace)
-	south_virtualspace = north_virtualspace'
-	west_virtualspace = east_virtualspace'
-    peps_tensor = randn(T, physicalspace ← north_virtualspace ⊗ east_virtualspace ⊗ south_virtualspace ⊗ west_virtualspace)
-	return peps_tensor
+	missing
 end
 
 # ╔═╡ ec6e77bb-0fc5-4730-85af-c37d15b2aeed
 md"""
 Then, we do the same thing for the environment tensors.
-The easiest way to implement this is to simply start from a completely random environment.
+The easiest way to initialize them is to also start from a completely random environment.
 """
 
 # ╔═╡ ff1bbb0b-6ff8-4835-a28f-f6b9ef221faa
 """
-	initialize_random_environment(double_peps::InfiniteDoublePEPS, boundary_virtualspace)::CTMRGEnvironment
+	initialize_random_environment(double_peps::InfiniteDoublePEPS, boundary_virtualspace) -> environment::CTMRGEnvironment
 
 Randomly initialize the environment tensors for a given double-layer PEPS and environment bond dimension.
+The spaces and scalar type should be chosen to be compatible with the `double_peps`, making use of `scalartype(double_peps)` to extract the number type and `space(double_peps, i)` to extract the required spaces.
 """
 function initialize_random_environment(double_peps::DoublePEPSTensor, boundary_virtualspace)
+	return missing
 	T = scalartype(double_peps)
 	
 	north_virtualspace = space(double_peps, 3)'
@@ -1023,7 +1018,8 @@ We just need to put the pieces together as follows:
 md"""
 Then, we will use automatic differentiation to obtain the gradient.
 For this, we will use Zygote.jl and reverse-mode automatic differentiation as a black-box way to obtain the gradient.
-Therefore, our total loss function and gradient simply looks like:
+Since we are using a naive approach, we will simply show that we can slightly lower the energy by following the path of the gradient.
+To this end, we implement the most naive [gradient descent](https://en.wikipedia.org/wiki/Gradient_descent) algorithm as follows:
 """
 
 # ╔═╡ a6a226c4-f212-4dce-8ec2-56242028bb96
@@ -1032,11 +1028,12 @@ md"""
 	Because of technical reasons, Zygote is currently not compatible with Julia v1.12, so we require v1.10 (LTS) to make this next part work.
 """
 
-# ╔═╡ f186a481-a37c-4a40-9b4c-a37fb66f58e4
+# ╔═╡ 7a5a2c94-7050-4885-9a32-fd393a500379
 md"""
 !!! warning
-	A number of warnings are printed 
-
+	This is not expected to be a smart nor efficient optimization method, and the main point here is to simply highlight some of the ways a typical procedure would go.
+	Additionally, this procedure highlights how doing naive methods can be quite unstable, and why people are trying to improve in various ways.
+	This might crash and it may not be your fault!
 """
 
 # ╔═╡ 209aa00c-0281-4e8c-b32c-d77888e8a5ae
@@ -1080,8 +1077,62 @@ test_peps = rand(Float64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3
 # ╔═╡ 14f49304-2286-48aa-b1b7-07a2e6f03cfe
 test_doublepeps = merge_braket(test_peps)
 
+# ╔═╡ aa0c308c-7b1e-4680-9193-c186c3bc2dd3
+md"""
+### Initialization solutions
+"""
+
+# ╔═╡ e0f67905-a3bd-490d-b96a-c5edfc8e4aca
+function initialize_peps_solution(T, physicalspace, north_virtualspace, east_virtualspace = north_virtualspace)
+	south_virtualspace = north_virtualspace'
+	west_virtualspace = east_virtualspace'
+    peps_tensor = randn(T, physicalspace ← north_virtualspace ⊗ east_virtualspace ⊗ south_virtualspace ⊗ west_virtualspace)
+	return peps_tensor
+end
+
+# ╔═╡ 079ab68e-859f-4218-9302-fa868d4324f5
+let
+	test_result = initialize_peps(Float64, ℂ^2, ℂ^3)
+	actual_result = initialize_peps_solution(Float64, ℂ^2, ℂ^3)
+	
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		almost(md"The spaces of the output are not correct. Did you make sure the north and south, and east and west virtual spaces match?")
+	else
+		correct()
+	end
+end
+
+# ╔═╡ 1168c7df-9817-4aca-9173-03c9b6ef7d01
+function initialize_random_environment_solution(double_peps::DoublePEPSTensor, boundary_virtualspace)
+	T = scalartype(double_peps)
+	
+	north_virtualspace = space(double_peps, 3)'
+	east_virtualspace = space(double_peps, 4)'
+	south_virtualspace = space(double_peps, 2)'
+	west_virtualspace = space(double_peps, 1)'
+	
+	edge_north = randn(T, boundary_virtualspace ⊗ north_virtualspace ← boundary_virtualspace)
+	edge_east = randn(T, boundary_virtualspace ⊗ east_virtualspace ← boundary_virtualspace)
+	edge_south = randn(T, boundary_virtualspace ⊗ south_virtualspace ← boundary_virtualspace)
+	edge_west = randn(T, boundary_virtualspace ⊗ west_virtualspace ← boundary_virtualspace)
+
+	corner_northeast = randn(T, boundary_virtualspace ← boundary_virtualspace)
+	corner_northwest = randn(T, boundary_virtualspace ← boundary_virtualspace)
+	corner_southeast = randn(T, boundary_virtualspace ← boundary_virtualspace)
+	corner_southwest = randn(T, boundary_virtualspace ← boundary_virtualspace)
+
+	return CTMRGEnvironment(
+		edge_north, edge_east, edge_south, edge_west,
+		corner_northwest, corner_northeast, corner_southeast, corner_southwest
+	)
+end
+
 # ╔═╡ f560e045-433f-4562-a611-119ce410342f
-test_environment = initialize_random_environment(test_doublepeps, ComplexSpace(4))
+test_environment = initialize_random_environment_solution(test_doublepeps, ComplexSpace(4))
 
 # ╔═╡ 71526bec-030b-476c-a264-db69f858aeb7
 function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; maxdim::Int = 10)
@@ -1448,18 +1499,19 @@ function loss_function_solution(peps::PEPSTensor; maxdim = 50, J = 1.0, g = 0.5)
 end
 
 # ╔═╡ 15508fe0-fa7e-416e-94a7-fb21db54f81c
-begin
-	local peps = test_peps
-	α = 0.1
+function naive_gradient_descent(peps; α = 0.1, J = 1.0, g = 1.0)
 	for i in 1:100
-		E, gradient = withgradient(loss_function_solution, peps)
-		peps = peps - α * only(gradient)
-		@info "Iteration $i" E
+		E, gradient = withgradient(peps) do peps
+			return loss_function_solution(peps; J, g)
+		end
+		∇peps = only(gradient) # unpack Tuple
+		peps = peps - α * normalize(∇peps)
+		@info "Iteration $i" E norm(∇peps)
 	end
 end
 
-# ╔═╡ 70a91307-eb9e-4c1a-bb4f-37731c882004
-loss_function_solution(initialize_peps(Float64, ℂ^2, ℂ^3))
+# ╔═╡ 929586c8-e674-48c5-a1d4-5c6fc9fc1070
+naive_gradient_descent(test_peps)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -2371,10 +2423,11 @@ version = "17.4.0+2"
 # ╟─56715c2b-8283-4a83-af08-fc72953b47e7
 # ╠═53dc3a3d-db99-4ad9-8889-3afcd5864d84
 # ╟─85dc0714-2f66-4bac-975e-a8af43fb4cbc
-# ╟─0600518e-aef2-4f9c-ad0f-0f082c58f391
+# ╠═0600518e-aef2-4f9c-ad0f-0f082c58f391
+# ╠═24028f25-c076-431d-87e1-740906412b15
 # ╠═faa5861e-bd36-4503-89bf-ed56a190250f
 # ╟─394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
-# ╠═f176dc62-b1f5-447c-958f-b08a6ff2efd7
+# ╟─f176dc62-b1f5-447c-958f-b08a6ff2efd7
 # ╠═ea38966c-c34d-4e5a-ad74-5cdc5d9c8c77
 # ╟─df08983e-dab0-4a00-bf0c-4eb91f42f1fa
 # ╟─20f29190-2e0d-42e3-af82-11761478d29d
@@ -2385,13 +2438,12 @@ version = "17.4.0+2"
 # ╟─c0862aa4-715b-412a-97ec-5bdf00a5fbdf
 # ╟─f2a65413-604c-45f4-99cc-e4f9abc914be
 # ╟─4cb24d7c-e175-4cab-90f1-dc91a1d84ec1
-# ╠═5d501f80-2e05-48ed-b62e-52ed723a2e90
-# ╠═076f533f-1e61-4172-b118-d0815e8c66cd
 # ╠═b2b002e3-5c08-4cc6-89c3-07870bf666d7
 # ╟─7a94202f-3487-47c7-923a-61a178257374
 # ╟─1f0ba404-8001-4bc3-9132-1ce4a3a2e78d
 # ╟─b1c0ca10-e70a-42f9-bb49-ecba7a4c0c4e
 # ╠═4bb53195-71b9-42d9-b801-c5bf4a674c14
+# ╟─079ab68e-859f-4218-9302-fa868d4324f5
 # ╟─ec6e77bb-0fc5-4730-85af-c37d15b2aeed
 # ╠═ff1bbb0b-6ff8-4835-a28f-f6b9ef221faa
 # ╟─3983afb7-585b-4e43-aab1-de4ce47d685a
@@ -2434,19 +2486,22 @@ version = "17.4.0+2"
 # ╠═cb153168-3a38-42b1-a2e5-4b5cd1062e49
 # ╠═7eb8edae-9d1b-4311-af50-6a258840f8eb
 # ╠═e58ed93c-4b37-44c4-8269-bb8cb039b4fa
-# ╠═2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
 # ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
-# ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
-# ╟─a6a226c4-f212-4dce-8ec2-56242028bb96
-# ╠═f186a481-a37c-4a40-9b4c-a37fb66f58e4
-# ╠═70a91307-eb9e-4c1a-bb4f-37731c882004
+# ╠═2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
+# ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
+# ╠═929586c8-e674-48c5-a1d4-5c6fc9fc1070
+# ╟─a6a226c4-f212-4dce-8ec2-56242028bb96
+# ╟─7a5a2c94-7050-4885-9a32-fd393a500379
 # ╠═209aa00c-0281-4e8c-b32c-d77888e8a5ae
 # ╟─b333c5f9-ba3d-429c-9403-37d1f9fb7360
 # ╟─dececc2a-5b73-4ad8-8056-e5c0a97a230f
 # ╠═f897eafd-d376-4ed9-811b-76290bf11280
 # ╠═14f49304-2286-48aa-b1b7-07a2e6f03cfe
 # ╠═f560e045-433f-4562-a611-119ce410342f
+# ╟─aa0c308c-7b1e-4680-9193-c186c3bc2dd3
+# ╠═e0f67905-a3bd-490d-b96a-c5edfc8e4aca
+# ╠═1168c7df-9817-4aca-9173-03c9b6ef7d01
 # ╟─6adac67a-3382-4ccd-bddd-6f7882a722ea
 # ╠═71526bec-030b-476c-a264-db69f858aeb7
 # ╟─b9ae7480-9341-4293-b615-d4b353ca39ed
