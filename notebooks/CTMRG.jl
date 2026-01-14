@@ -1026,29 +1026,29 @@ For this, we will use Zygote.jl and reverse-mode automatic differentiation as a 
 Therefore, our total loss function and gradient simply looks like:
 """
 
-# ╔═╡ 8cc7c8f8-59fe-45d1-b50f-3651f24e5c6e
-real_inner(_, η₁, η₂) = real(dot(η₁, η₂))
-
 # ╔═╡ a6a226c4-f212-4dce-8ec2-56242028bb96
 md"""
 !!! warning
-	Because of technical reasons, Zygote is currently not compatible with Julia v1.12, so we require v1.10 or v1.11 to make this next part work.
+	Because of technical reasons, Zygote is currently not compatible with Julia v1.12, so we require v1.10 (LTS) to make this next part work.
+"""
+
+# ╔═╡ f186a481-a37c-4a40-9b4c-a37fb66f58e4
+md"""
+!!! warning
+	A number of warnings are printed 
+
 """
 
 # ╔═╡ 209aa00c-0281-4e8c-b32c-d77888e8a5ae
 md"""
 # V. Conclusions
 
-If everything went well, we should now be in a position to confidently start optimizing infinite PEPS for various Hamiltonians defined on a square lattice.
-However, in all honesty we will quite quickly reach the limits of what our naive implimentation can achieve.
-We will briefly discuss some of these short-comings here, some of them simply extensions that we could fix by investing a bit more time, and others quite complex algorithmic improvements that are less straightforward to achieve.
+If everything went well, we should now be in a position to assess how confidently we can start optimizing infinite PEPS for various Hamiltonians defined on a square lattice.
+In particular, we find that just doing a naive implementation not only takes some effort, it additonally turns out to typically be quite slow and unstable.
+The reasons for this will be discussed throughout this workshop and various interesting talks are tackling various aspects of this.
 
-## Missing Features
-
-## Missing Optimizations
-
-## Further Research
-
+There are also a number of missing features to really turn this into a true algorithm ready for finding PEPS groundstates.
+In particular, unit cells, fixed-point differentiation, symmetries, hardware accellerators, ... are more or less required these days to really have a competitive algorithm.
 
 
 ## Open-source Libraries
@@ -1106,7 +1106,7 @@ function ctmrg_projectors_solution(environments, peps::DoublePEPSTensor; maxdim:
 		environments.edge_south[10 9; -3]
 
 	M = L * R
-	U, Σ, Vᴴ = svd_trunc(M; trunc = truncrank(maxdim) & trunctol(; atol = 1e-8))
+	U, Σ, Vᴴ = svd_trunc(M / norm(M); trunc = truncrank(maxdim) & trunctol(; atol = 1e-8))
 	Σ_invsqrt = inv(sqrt(Σ))
 	PR = R * Vᴴ' * Σ_invsqrt
 	PL = Σ_invsqrt * U' * L
@@ -1439,30 +1439,23 @@ function ising_energy_solution(peps, environment; J = 1.0, g = 1.0)
 	return E_horizontal + E_vertical + E_onsite
 end
 
-# ╔═╡ 17367770-d24f-4cba-a87c-2e379ec24ffb
-let d = 2, D = 3, χ = 4
-	peps = initialize_peps(Float64, ℂ^d, ℂ^D)
-	dpeps = merge_braket(peps)
-	envs = initialize_random_environment(dpeps, ℂ^χ)
-	# envs = ctmrg_solution(envs, dpeps; maxdim = χ, maxiter = 10)
-	J = g = 1.0
-	ising_energy_solution(peps, envs; J, g)
-end
-
 # ╔═╡ a4e00e0a-af1b-4a3f-997f-381bcbf9932d
-function loss_function_solution(peps::PEPSTensor; maxdim = 10, J = 1.0, g = 0.5)
+function loss_function_solution(peps::PEPSTensor; maxdim = 50, J = 1.0, g = 0.5)
 	double_peps = merge_braket(peps)
 	environments = initialize_random_environment(double_peps, ℂ^maxdim)
 	environments = ctmrg_solution(environments, double_peps)
 	return real(ising_energy_solution(peps, environments; J, g))
 end
 
-# ╔═╡ 36832d3a-10cb-4d3a-b362-1505312e2c4d
-groundstate, energy, ∂loss, numfg, convergence_history = optimize(
-        test_peps, LBFGS(); inner = real_inner,
-    ) do peps
-		E, grads = withgradient(loss_function_solution, peps)
-		return E, only(grads)
+# ╔═╡ 15508fe0-fa7e-416e-94a7-fb21db54f81c
+begin
+	local peps = test_peps
+	α = 0.1
+	for i in 1:100
+		E, gradient = withgradient(loss_function_solution, peps)
+		peps = peps - α * only(gradient)
+		@info "Iteration $i" E
+	end
 end
 
 # ╔═╡ 70a91307-eb9e-4c1a-bb4f-37731c882004
@@ -2437,19 +2430,18 @@ version = "17.4.0+2"
 # ╠═80457440-8a86-4842-b5af-20af852a0236
 # ╠═49dd1b84-8130-4c52-94e0-831efca34ccb
 # ╠═f14e8ba9-d692-46da-be7b-3ac79af5d744
-# ╠═17367770-d24f-4cba-a87c-2e379ec24ffb
 # ╟─06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
 # ╠═cb153168-3a38-42b1-a2e5-4b5cd1062e49
 # ╠═7eb8edae-9d1b-4311-af50-6a258840f8eb
 # ╠═e58ed93c-4b37-44c4-8269-bb8cb039b4fa
-# ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
 # ╠═2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
-# ╠═8cc7c8f8-59fe-45d1-b50f-3651f24e5c6e
-# ╠═36832d3a-10cb-4d3a-b362-1505312e2c4d
-# ╠═a6a226c4-f212-4dce-8ec2-56242028bb96
+# ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
+# ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
+# ╟─a6a226c4-f212-4dce-8ec2-56242028bb96
+# ╠═f186a481-a37c-4a40-9b4c-a37fb66f58e4
 # ╠═70a91307-eb9e-4c1a-bb4f-37731c882004
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
-# ╟─209aa00c-0281-4e8c-b32c-d77888e8a5ae
+# ╠═209aa00c-0281-4e8c-b32c-d77888e8a5ae
 # ╟─b333c5f9-ba3d-429c-9403-37d1f9fb7360
 # ╟─dececc2a-5b73-4ad8-8056-e5c0a97a230f
 # ╠═f897eafd-d376-4ed9-811b-76290bf11280
