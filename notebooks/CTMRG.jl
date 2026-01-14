@@ -29,11 +29,8 @@ using TensorKit
 # ╔═╡ 30e688b4-293f-40af-a839-31fabec981cc
 using TensorKitTensors: SpinOperators
 
-# ╔═╡ 7eb8edae-9d1b-4311-af50-6a258840f8eb
-using OptimKit
-
 # ╔═╡ d6e0fb57-f686-4400-aa92-748288e0591d
-using Zygote
+using Zygote # pronounced Zee-goat-ehhh
 
 # ╔═╡ aeeae089-8fd3-4f85-b0bb-8773f9696073
 TableOfContents()
@@ -981,33 +978,28 @@ md"""
 The final piece of the puzzle simply puts all pieces of the puzzle together.
 In principle, we can use any black-box optimization routine we like, and here we will opt to write our own incredibly naive [Gradient descent](https://en.wikipedia.org/wiki/Gradient_descent) implementation.
 For this to work, we only need to define a loss function (the energy), and the gradient.
+"""
+
+# ╔═╡ 5f5a355a-24f8-44ac-827b-5a9a99edae8b
+md"""
+## Loss Function
 
 For the loss function, we already have all of the components that we need to start from a single PEPS tensor, and end up with the energy computed from the Ising model Hamiltonian.
 We just need to put the pieces together as follows:
-
 """
 
 # ╔═╡ 48466ad6-0daa-4ffa-bcf5-efa1578da7ee
 hint(md"To define a valid loss function, we must ensure the result is real!")
 
 # ╔═╡ c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
-
-
-# ╔═╡ cb153168-3a38-42b1-a2e5-4b5cd1062e49
-md"""
-## Optimization Manifold
-Since we plan on making use of automatic differentiation to provide
-"""
+let
+	still_missing()
+end
 
 # ╔═╡ e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 md"""
-## Gradient and Loss Function
+## Gradient
 
-
-"""
-
-# ╔═╡ 2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
-md"""
 Then, we will use automatic differentiation to obtain the gradient.
 For this, we will use Zygote.jl and reverse-mode automatic differentiation as a black-box way to obtain the gradient.
 Since we are using a naive approach, we will simply show that we can slightly lower the energy by following the path of the gradient.
@@ -1462,7 +1454,7 @@ end
 """
 	loss_function(peps::PEPSTensor; trunc = default_trunc, maxiter = 100, J = 1.0, g = 0.5) -> energy::Real
 
-Compute the (real) loss function for the given PEPS tensor.
+Compute the loss function for the given PEPS tensor.
 This can be achieved by following this procedure:
 
 1. Merge the PEPS tensor into a double layer (`merge_braket`)
@@ -1588,7 +1580,6 @@ naive_gradient_descent(test_peps)
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
-OptimKit = "77e91f04-9b3b-57a6-a776-40b61faaebe0"
 PlutoTeachingTools = "661c6b06-c737-4d37-b85c-46df65de6f69"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 TensorKit = "07d1fe3e-3e46-537d-9eac-e9e13d0d4cec"
@@ -1596,7 +1587,6 @@ TensorKitTensors = "41b62e7d-e9d1-4e23-942c-79a97adf954b"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
-OptimKit = "~0.4.2"
 PlutoTeachingTools = "~0.4.6"
 PlutoUI = "~0.7.77"
 TensorKit = "~0.16.0"
@@ -1610,7 +1600,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.10.10"
 manifest_format = "2.0"
-project_hash = "abbd62fe6a746a08938f120a86966a704151bda2"
+project_hash = "7a0ad6292ff314e35060cea28c64a6785b44ed8c"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2114,12 +2104,6 @@ git-tree-sha1 = "1346c9208249809840c91b26703912dff463d335"
 uuid = "efe28fd5-8261-553b-a9e1-b2916fc3738e"
 version = "0.5.6+0"
 
-[[deps.OptimKit]]
-deps = ["LinearAlgebra", "Printf", "ScopedValues", "VectorInterface"]
-git-tree-sha1 = "5c92e3ab480969e80996587da5395f00224b9fdf"
-uuid = "77e91f04-9b3b-57a6-a776-40b61faaebe0"
-version = "0.4.2"
-
 [[deps.OrderedCollections]]
 git-tree-sha1 = "05868e21324cede2207c6f0f466b4bfef6d5e7ee"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
@@ -2554,14 +2538,12 @@ version = "17.4.0+2"
 # ╟─ffcabfcf-0ef9-45f6-ab97-c42a38659167
 # ╠═f14e8ba9-d692-46da-be7b-3ac79af5d744
 # ╟─6af48706-5bfe-4aac-bf31-a8f7e69006c3
-# ╠═06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
-# ╟─48466ad6-0daa-4ffa-bcf5-efa1578da7ee
+# ╟─06bb1f23-a4cb-4b10-9d4e-b8f59c2171cc
+# ╟─5f5a355a-24f8-44ac-827b-5a9a99edae8b
 # ╠═55e6c29b-2e62-4b86-8d76-ca94900878f0
+# ╟─48466ad6-0daa-4ffa-bcf5-efa1578da7ee
 # ╠═c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
-# ╠═cb153168-3a38-42b1-a2e5-4b5cd1062e49
-# ╠═7eb8edae-9d1b-4311-af50-6a258840f8eb
-# ╠═e58ed93c-4b37-44c4-8269-bb8cb039b4fa
-# ╠═2608b2e6-f8d1-48fd-9c55-ae5fe238fc7f
+# ╟─e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
 # ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
 # ╠═929586c8-e674-48c5-a1d4-5c6fc9fc1070
