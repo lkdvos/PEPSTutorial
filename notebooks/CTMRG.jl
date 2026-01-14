@@ -1053,7 +1053,7 @@ D = $(@bind D Slider(2:5; show_value=true))
 
 # ╔═╡ 0dfe8fbf-c5fd-49c3-8c96-19ae21dae49e
 md"""
-χ = $(@bind χ Slider(10:10:100; show_value=true))
+χ = $(@bind χ Slider(10:10:100; show_value=true, default=80))
 """
 
 # ╔═╡ a6a226c4-f212-4dce-8ec2-56242028bb96
@@ -1104,7 +1104,7 @@ md"""
 # ╔═╡ f897eafd-d376-4ed9-811b-76290bf11280
 test_peps = let
 	Random.seed!(123456)
-	rand(Float64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3) ⊗ ComplexSpace(3)' ⊗ ComplexSpace(3)')
+	rand(ComplexF64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3) ⊗ ComplexSpace(3)' ⊗ ComplexSpace(3)')
 end
 
 # ╔═╡ 8c52c4bf-27c6-49fc-baea-4bbc628ca9e6
@@ -1761,7 +1761,7 @@ end
 
 # ╔═╡ 929586c8-e674-48c5-a1d4-5c6fc9fc1070
 begin
-	peps = initialize_peps_solution(Float64, ℂ^2, ℂ^D)
+	peps = initialize_peps_solution(ComplexF64, ℂ^2, ℂ^D)
 	E, groundstate = naive_gradient_descent(peps; maxiter = 10, tol = 1e-3, trunc = truncrank(χ) & trunctol(; atol = 1e-12))
 end
 
@@ -2728,7 +2728,7 @@ version = "17.4.0+2"
 # ╠═f6acc633-d9ab-4cf5-b475-f608d0df13b2
 # ╠═c08f34fc-f212-4c17-a7b8-ea254051f4b0
 # ╠═d007a99a-fb6a-4b76-9edc-949fa2787b8d
-# ╠═3ba7cdfd-94f7-417e-ba75-4369c0d2d9d1
+# ╟─3ba7cdfd-94f7-417e-ba75-4369c0d2d9d1
 # ╠═4a65aa03-c385-4bfb-944c-911606a0e2ff
 # ╟─740e8895-9853-4c69-bca4-fd34ae4c2a6b
 # ╠═d97aae83-b513-4332-bc01-17fdd38b1381
@@ -2745,7 +2745,7 @@ version = "17.4.0+2"
 # ╟─e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
 # ╠═73baaaee-ba2e-4522-ab9b-01e6e9e306ed
-# ╠═13609de1-ff78-4875-b480-7b751a83c6cb
+# ╟─13609de1-ff78-4875-b480-7b751a83c6cb
 # ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
 # ╟─cb96d9f5-07db-4eca-a8af-391f0c424f0a
 # ╟─0dfe8fbf-c5fd-49c3-8c96-19ae21dae49e
