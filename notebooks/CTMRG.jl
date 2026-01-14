@@ -32,6 +32,9 @@ using TensorKitTensors: SpinOperators
 # ╔═╡ d6e0fb57-f686-4400-aa92-748288e0591d
 using Zygote # pronounced Zee-goat-ehhh
 
+# ╔═╡ 73baaaee-ba2e-4522-ab9b-01e6e9e306ed
+using ChainRules: @ignore_derivatives
+
 # ╔═╡ 9eb6a3e3-29bf-481c-b23e-aabaae93345b
 using Random
 
@@ -76,6 +79,14 @@ end
 
 # ╔═╡ 470aa499-b5b8-440b-bd48-095aac2377cf
 test_variable = 1 # this variable does outlive this scope
+
+# ╔═╡ f29b363d-b4e0-4f7b-b57e-44f0bef31de9
+md"""
+!!! warning
+	This notebook might still contain some typos or more severe errors.
+	Don't hesitate to ask for help, or feel free to inspect what is going on behind the scenes.
+	Various code cells are hidden by default, but can be made visible by clicking the small eye icon on their left.
+"""
 
 # ╔═╡ 8b70a006-1f58-4181-ae67-f5dbb8a733a7
 md"""
@@ -522,16 +533,11 @@ const DoublePEPSTensor{T, S} = AbstractTensorMap{T, S, 2, 2}
 
 Contract a bra and ket tensor over the physical index, while merging the virtual spaces together.
 See also the section on Combining and Splitting Indices.
+The output shape should be:
+- `double_peps`: ``W ⊗ S ← N ⊗ E``
 """
 function merge_braket(peps::PEPSTensor)
-	V_north = space(peps, 2) ⊗ space(peps, 2)'
-	fuse_north = isomorphism(fuse(V_north) ← V_north)
-	V_east = space(peps, 3) ⊗ space(peps, 3)'
-	fuse_east = isomorphism(fuse(V_east) ← V_east)
-	@tensor braket[S W; N E] := conj(peps[p; n' e' s' w']) * peps[p; n e s w] *
-		fuse_north[N; n n'] * fuse_east[E; e e'] *
-		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
-	return braket
+	return missing
 end
 
 # ╔═╡ 9da0bb7d-f918-40a1-871f-a546d7b5f641
@@ -834,13 +840,13 @@ end
 
 # ╔═╡ ea38966c-c34d-4e5a-ad74-5cdc5d9c8c77
 function ctmrg(environment, peps; maxiter = 100, tol = 1e-6, kwargs...)
-	@info "Starting CTMRG"
+	@ignore_derivatives(@info "Starting CTMRG")
 
 	for iter in 1:maxiter
 		environment_new = ctmrg_iteration(environment, peps; kwargs...)
 		χ = maximal_chi(environment_new)
 		svd_distance = ctmrg_convergence(environment, environment_new)
-		@info "Iteration $iter" χ svd_distance
+		@ignore_derivatives(@info "Iteration $iter" χ svd_distance)
 		environment = environment_new
 		svd_distance <= tol && break
 	end
@@ -883,6 +889,22 @@ md"""
 """
 
 # ╔═╡ 4555b77c-6d3a-4bfd-b1a7-fa14e93670a1
+"""
+    const DoubleDensityTensor{T, S} = AbstractTensorMap{T, S, 2, 4}
+
+Default type for double-layer PEPS tensors of element type `T` and space type `S`, with 4 virtual indices, conventionally ordered as: ``P ⊗ P' ← N ⊗ E ⊗ S ⊗ W``.
+Here, ``N``, ``E``, ``S`` and ``W`` denote the north, east, south and west doubled virtual spaces, respectively, while ``P`` is the ket and ``P′`` is the bra physical index.
+
+```
+        P' N
+        | ╱
+        |╱
+   W---- ----E
+       ╱|
+      ╱ |
+     S  P
+```
+"""
 const DoubleDensityTensor{T, S} = AbstractTensorMap{T, S, 2, 4}
 
 # ╔═╡ 80907dcf-e9b6-47e8-89e9-f9e69a23ee63
@@ -1070,8 +1092,22 @@ test_peps = let
 	rand(Float64, ComplexSpace(2) ← ComplexSpace(3) ⊗ ComplexSpace(3) ⊗ ComplexSpace(3)' ⊗ ComplexSpace(3)')
 end
 
-# ╔═╡ 14f49304-2286-48aa-b1b7-07a2e6f03cfe
-test_doublepeps = merge_braket(test_peps)
+# ╔═╡ 8c52c4bf-27c6-49fc-baea-4bbc628ca9e6
+let
+	test_result = merge_braket(test_peps)
+	actual_result = merge_braket(test_peps)
+	if ismissing(test_result)
+		still_missing()
+	elseif typeof(test_result) !== typeof(actual_result)
+		keep_working(md"The type of the output is not correct. Did you return the required outputs?")
+	elseif space(test_result) != space(actual_result)
+		keep_working(md"The space of the output is not correct. Did you check the order of the legs and bipartition?")
+	elseif !(test_result ≈ actual_result)
+			almost(md"The returned value is incorrect.")
+	else
+		correct()
+	end
+end
 
 # ╔═╡ aa0c308c-7b1e-4680-9193-c186c3bc2dd3
 md"""
@@ -1101,6 +1137,21 @@ let
 		correct()
 	end
 end
+
+# ╔═╡ 480c3e01-9e73-45ef-87a6-b68dc15185a3
+function merge_braket_solution(peps::PEPSTensor)
+	V_north = space(peps, 2) ⊗ space(peps, 2)'
+	fuse_north = isomorphism(fuse(V_north) ← V_north)
+	V_east = space(peps, 3) ⊗ space(peps, 3)'
+	fuse_east = isomorphism(fuse(V_east) ← V_east)
+	@tensor braket[S W; N E] := conj(peps[p; n' e' s' w']) * peps[p; n e s w] *
+		fuse_north[N; n n'] * fuse_east[E; e e'] *
+		conj(fuse_north[S; s s']) * conj(fuse_east[W; w w'])
+	return braket
+end
+
+# ╔═╡ 14f49304-2286-48aa-b1b7-07a2e6f03cfe
+test_doublepeps = merge_braket_solution(test_peps)
 
 # ╔═╡ 1168c7df-9817-4aca-9173-03c9b6ef7d01
 function initialize_random_environment_solution(double_peps::DoublePEPSTensor, boundary_virtualspace = ℂ^4)
@@ -1648,7 +1699,7 @@ end
 
 # ╔═╡ a4e00e0a-af1b-4a3f-997f-381bcbf9932d
 function loss_function_solution(peps::PEPSTensor; J = 1.0, g = 0.5, kwargs...)
-	double_peps = merge_braket(peps)
+	double_peps = merge_braket_solution(peps)
 	environments = initialize_random_environment_solution(double_peps, ℂ^maxdim)
 	environments = ctmrg_solution(environments, double_peps; kwargs...)
 	return real(ising_energy_solution(peps, environments; J, g))
@@ -1689,6 +1740,7 @@ naive_gradient_descent(test_peps)
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
+ChainRules = "082447d4-558c-5d27-93f4-14fc19e9eca2"
 PlutoTeachingTools = "661c6b06-c737-4d37-b85c-46df65de6f69"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -1697,6 +1749,7 @@ TensorKitTensors = "41b62e7d-e9d1-4e23-942c-79a97adf954b"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
+ChainRules = "~1.72.6"
 PlutoTeachingTools = "~0.4.6"
 PlutoUI = "~0.7.77"
 TensorKit = "~0.16.0"
@@ -1710,7 +1763,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.10.10"
 manifest_format = "2.0"
-project_hash = "5e2b17fa6a0c62ad8d3dba93a735d5ec207b068b"
+project_hash = "bbb48af8626bc08f2da1b46478fbed90310dd276"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2561,6 +2614,7 @@ version = "17.4.0+2"
 # ╟─9b2b4b2e-eb14-11f0-b4d4-79004a9b7521
 # ╠═043300a2-2333-4552-a9c1-d95dead19e51
 # ╠═470aa499-b5b8-440b-bd48-095aac2377cf
+# ╟─f29b363d-b4e0-4f7b-b57e-44f0bef31de9
 # ╟─8b70a006-1f58-4181-ae67-f5dbb8a733a7
 # ╟─715a210a-7f7b-438a-8b08-b1494dbf99db
 # ╠═02cf1c6d-c588-4f49-8de0-4693ed33d21d
@@ -2589,7 +2643,7 @@ version = "17.4.0+2"
 # ╟─56715c2b-8283-4a83-af08-fc72953b47e7
 # ╠═53dc3a3d-db99-4ad9-8889-3afcd5864d84
 # ╟─85dc0714-2f66-4bac-975e-a8af43fb4cbc
-# ╠═0600518e-aef2-4f9c-ad0f-0f082c58f391
+# ╟─0600518e-aef2-4f9c-ad0f-0f082c58f391
 # ╠═faa5861e-bd36-4503-89bf-ed56a190250f
 # ╠═24028f25-c076-431d-87e1-740906412b15
 # ╟─394f7270-12f5-4ec0-b7b1-e8e5cd8c6f4e
@@ -2598,8 +2652,9 @@ version = "17.4.0+2"
 # ╟─df08983e-dab0-4a00-bf0c-4eb91f42f1fa
 # ╟─20f29190-2e0d-42e3-af82-11761478d29d
 # ╟─ab8cc3a0-0fd4-4f11-be1d-40b2a44f53d2
-# ╟─d2c17a80-1c4a-49be-b615-ed6eb53b0779
+# ╠═d2c17a80-1c4a-49be-b615-ed6eb53b0779
 # ╠═a3a87f5e-da1a-45f2-b45b-8df484a30de8
+# ╟─8c52c4bf-27c6-49fc-baea-4bbc628ca9e6
 # ╟─9da0bb7d-f918-40a1-871f-a546d7b5f641
 # ╟─c0862aa4-715b-412a-97ec-5bdf00a5fbdf
 # ╟─f2a65413-604c-45f4-99cc-e4f9abc914be
@@ -2639,9 +2694,9 @@ version = "17.4.0+2"
 # ╟─df668aea-2156-40f4-8dbd-2a442e863210
 # ╟─7e74bbd4-d62e-42ea-9c44-6106c5b9f860
 # ╟─67503430-d5d1-4ee6-847f-4b7dbecdf7ed
-# ╠═4555b77c-6d3a-4bfd-b1a7-fa14e93670a1
+# ╟─4555b77c-6d3a-4bfd-b1a7-fa14e93670a1
 # ╠═80907dcf-e9b6-47e8-89e9-f9e69a23ee63
-# ╟─1a39fb62-515a-41d4-8ae0-4e8e16a830df
+# ╠═1a39fb62-515a-41d4-8ae0-4e8e16a830df
 # ╠═f6acc633-d9ab-4cf5-b475-f608d0df13b2
 # ╠═c08f34fc-f212-4c17-a7b8-ea254051f4b0
 # ╠═d007a99a-fb6a-4b76-9edc-949fa2787b8d
@@ -2661,6 +2716,7 @@ version = "17.4.0+2"
 # ╟─c2178ac3-76dc-49a2-aa5a-a7d5bd8144af
 # ╟─e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
+# ╠═73baaaee-ba2e-4522-ab9b-01e6e9e306ed
 # ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
 # ╠═929586c8-e674-48c5-a1d4-5c6fc9fc1070
 # ╟─a6a226c4-f212-4dce-8ec2-56242028bb96
@@ -2674,6 +2730,7 @@ version = "17.4.0+2"
 # ╠═f560e045-433f-4562-a611-119ce410342f
 # ╟─aa0c308c-7b1e-4680-9193-c186c3bc2dd3
 # ╠═e0f67905-a3bd-490d-b96a-c5edfc8e4aca
+# ╠═480c3e01-9e73-45ef-87a6-b68dc15185a3
 # ╠═1168c7df-9817-4aca-9173-03c9b6ef7d01
 # ╟─62df3042-5244-4c31-9e5c-aefe893221e5
 # ╠═b9ae7480-9341-4293-b615-d4b353ca39ed
