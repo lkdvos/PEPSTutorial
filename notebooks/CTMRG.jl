@@ -1041,6 +1041,21 @@ Since we are using a naive approach, we will simply show that we can slightly lo
 To this end, we implement the most naive [gradient descent]() algorithm as follows:
 """
 
+# ╔═╡ 13609de1-ff78-4875-b480-7b751a83c6cb
+md"""
+I have solved the exercises: $(@bind has_solved CheckBox())
+"""
+
+# ╔═╡ cb96d9f5-07db-4eca-a8af-391f0c424f0a
+md"""
+D = $(@bind D Slider(2:5; show_value=true))
+"""
+
+# ╔═╡ 0dfe8fbf-c5fd-49c3-8c96-19ae21dae49e
+md"""
+χ = $(@bind χ Slider(10:10:100; show_value=true))
+"""
+
 # ╔═╡ a6a226c4-f212-4dce-8ec2-56242028bb96
 md"""
 !!! warning
@@ -1575,13 +1590,14 @@ end
 # ╔═╡ ea14479b-91d0-4fa9-942b-a147e1649d4c
 function reduced_densitymatrix_1x1_solution(ρ_local, environment)
 	return @tensor ρ[-1; -2] :=
-		environment.edge_west[11 3; 1] *
+		environment.edge_west[12 3; 1] *
 		environment.corner_northwest[1; 2] *
 		environment.edge_north[2 4; 5] *
 		environment.corner_northeast[5; 6] *
 		environment.edge_east[6 7; 8] *
 		environment.corner_southeast[8; 9] *
 		environment.edge_south[9 10; 11] *
+		environment.corner_southwest[11; 12] *
 		ρ_local[-1 -2; 4 7 10 3]
 end
 
@@ -1668,14 +1684,14 @@ function ising_energy_solution(peps, environment; J = 1.0, g = 1.0)
 	ρ_local = merge_ketbra_solution(peps)
 	
 	ZZ = Z ⊗ Z
-	ρ = reduced_densitymatrix_1x2_solution(ρ_local, environment)
-	E_horizontal = -(J / 2) * tr(ZZ * ρ) / tr(ρ)
+	ρ1 = reduced_densitymatrix_1x2_solution(ρ_local, environment)
+	E_horizontal = -(J / 2) * tr(ZZ * ρ1) / tr(ρ1)
 
-	ρ = reduced_densitymatrix_2x1_solution(ρ_local, environment)
-	E_vertical = -(J / 2) * tr(ZZ * ρ) / tr(ρ)
+	ρ2 = reduced_densitymatrix_2x1_solution(ρ_local, environment)
+	E_vertical = -(J / 2) * tr(ZZ * ρ2) / tr(ρ2)
 
-	ρ = reduced_densitymatrix_1x1_solution(ρ_local, environment)
-	E_onsite = -(J * g) * tr(X * ρ) / tr(ρ)
+	ρ3 = reduced_densitymatrix_1x1_solution(ρ_local, environment)
+	E_onsite = -(J * g) * tr(X * ρ3) / tr(ρ3)
 	
 	return E_horizontal + E_vertical + E_onsite
 end
@@ -1700,7 +1716,7 @@ end
 # ╔═╡ a4e00e0a-af1b-4a3f-997f-381bcbf9932d
 function loss_function_solution(peps::PEPSTensor; J = 1.0, g = 0.5, kwargs...)
 	double_peps = merge_braket_solution(peps)
-	environments = initialize_random_environment_solution(double_peps, ℂ^maxdim)
+	environments = initialize_random_environment_solution(double_peps, ℂ^50)
 	environments = ctmrg_solution(environments, double_peps; kwargs...)
 	return real(ising_energy_solution(peps, environments; J, g))
 end
@@ -1723,19 +1739,31 @@ let
 end
 
 # ╔═╡ 15508fe0-fa7e-416e-94a7-fb21db54f81c
-function naive_gradient_descent(peps; α = 0.1, J = 1.0, g = 1.0)
-	for i in 1:100
-		E, gradient = withgradient(peps) do x
-			return loss_function_solution(x; J, g)
+function naive_gradient_descent(peps; α = 0.1, J = 1.0, g = 1.0, maxiter = 100, tol = 1e-4, kwargs...)
+	local E
+	for i in 1:maxiter
+		if has_solved
+			E, gradient = withgradient(peps) do x
+				return loss_function(x; J, g, kwargs...)
+			end
+		else
+			E, gradient = withgradient(peps) do x
+				return loss_function_solution(x; J, g, kwargs...)
+			end
 		end
 		∇peps = only(gradient) # unpack Tuple
 		peps = peps - α * normalize(∇peps)
 		@info "Iteration $i" E norm(∇peps)
+		norm(∇peps) <= tol && break
 	end
+	return E, peps
 end
 
 # ╔═╡ 929586c8-e674-48c5-a1d4-5c6fc9fc1070
-naive_gradient_descent(test_peps)
+begin
+	peps = initialize_peps_solution(Float64, ℂ^2, ℂ^D)
+	E, groundstate = naive_gradient_descent(peps; maxiter = 10, tol = 1e-3, trunc = truncrank(χ) & trunctol(; atol = 1e-12))
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -2717,7 +2745,10 @@ version = "17.4.0+2"
 # ╟─e58ed93c-4b37-44c4-8269-bb8cb039b4fa
 # ╠═d6e0fb57-f686-4400-aa92-748288e0591d
 # ╠═73baaaee-ba2e-4522-ab9b-01e6e9e306ed
+# ╠═13609de1-ff78-4875-b480-7b751a83c6cb
 # ╠═15508fe0-fa7e-416e-94a7-fb21db54f81c
+# ╟─cb96d9f5-07db-4eca-a8af-391f0c424f0a
+# ╟─0dfe8fbf-c5fd-49c3-8c96-19ae21dae49e
 # ╠═929586c8-e674-48c5-a1d4-5c6fc9fc1070
 # ╟─a6a226c4-f212-4dce-8ec2-56242028bb96
 # ╟─7a5a2c94-7050-4885-9a32-fd393a500379
